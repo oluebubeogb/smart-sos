@@ -163,9 +163,24 @@ app.post("/api/session/:id/nearby", (req, res) => {
 app.post("/api/session/:id/stop", (req, res) => {
   const s = sessions.get(req.params.id);
   if (!s) return res.status(404).json({ error: "no session" });
-  endSessionObj(s, "ended by device");
-  broadcast({ type: "ended", sessionId: s.id, session: publicSession(s) });
-  res.json({ ok: true });
+  // Idempotent: if admin already ended, just acknowledge so device can cleanup.
+  if (s.active) {
+    endSessionObj(s, "ended by device");
+    broadcast({ type: "ended", sessionId: s.id, by: "device", session: publicSession(s) });
+  }
+  res.json({ ok: true, active: s.active, status: s.status });
+});
+
+// Public device status (no locations/nearby/audio leaked) — PWA polls while SOS is active
+app.get("/api/session/:id/status", (req, res) => {
+  const s = sessions.get(req.params.id);
+  if (!s) return res.status(404).json({ error: "no session" });
+  res.json({
+    id: s.id,
+    active: !!s.active,
+    status: s.status,
+    endedAt: s.endedAt || null,
+  });
 });
 
 // ---- audio upload (saved calls) ----
@@ -207,6 +222,9 @@ app.post("/api/session/:id/audio/finalize", async (req, res) => {
   const dir = sessionAudioDir(s.id);
   let chunks = [];
   try { chunks = (await fsp.readdir(dir)).filter((f) => /^chunk-\d+\.webm$/.test(f)).sort(); } catch {}
+  // Keep every chunk-* file. Full recording is best-effort binary concat of complete
+  // WebM segments (each from a restarted MediaRecorder). Browsers may only play the
+  // first segment from a naive concat — chunk playlist in admin is the source of truth.
   let recording = null;
   if (chunks.length) {
     try {
@@ -215,10 +233,13 @@ app.post("/api/session/:id/audio/finalize", async (req, res) => {
       await fsp.writeFile(path.join(dir, "recording.webm"), Buffer.concat(buffers));
       recording = "recording.webm";
       if (!s.audioFiles.includes("recording.webm")) s.audioFiles.push("recording.webm");
+      for (const c of chunks) {
+        if (!s.audioFiles.includes(c)) s.audioFiles.push(c);
+      }
     } catch (e) { console.error("finalize concat failed", s.id, e.message); }
   }
   await persist(s);
-  res.json({ ok: true, recording, chunks: chunks.length });
+  res.json({ ok: true, recording, chunks: chunks.length, keptChunks: true });
 });
 
 app.get("/api/session/:id/audio", requireAdmin, async (req, res) => {
@@ -226,8 +247,13 @@ app.get("/api/session/:id/audio", requireAdmin, async (req, res) => {
   if (!s) return res.status(404).json({ error: "no session" });
   const dir = sessionAudioDir(s.id);
   let files = [];
-  try { files = (await fsp.readdir(dir)).filter((f) => /\.(webm|m4a)$/.test(f)).sort(); } catch {}
-  res.json({ files: files.map((f) => ({ name: f, url: "/api/session/" + s.id + "/audio/" + f })) });
+  try { files = (await fsp.readdir(dir)).filter((f) => /\.(webm|m4a)$/.test(f)); } catch {}
+  const recs = files.filter((f) => f.startsWith("recording")).sort();
+  const chunks = files.filter((f) => /^chunk-\d+\./.test(f)).sort();
+  const other = files.filter((f) => !recs.includes(f) && !chunks.includes(f)).sort();
+  // Always return full recording (if any) AND all chunks — never drop segments.
+  const ordered = [...recs, ...chunks, ...other];
+  res.json({ files: ordered.map((f) => ({ name: f, url: "/api/session/" + s.id + "/audio/" + f })) });
 });
 
 app.get("/api/session/:id/audio/:file", requireAdmin, (req, res) => {
@@ -274,9 +300,9 @@ app.get("/api/session/:id/listen-token", requireAdmin, async (req, res) => {
 app.post("/api/session/:id/end", requireAdmin, (req, res) => {
   const s = sessions.get(req.params.id);
   if (!s) return res.status(404).json({ error: "no session" });
-  endSessionObj(s, "ended by admin");
-  broadcast({ type: "ended", sessionId: s.id, session: publicSession(s) });
-  res.json({ ok: true });
+  if (s.active) endSessionObj(s, "ended by admin");
+  broadcast({ type: "ended", sessionId: s.id, by: "admin", session: publicSession(s) });
+  res.json({ ok: true, active: s.active, status: s.status });
 });
 
 function endSessionObj(s, status) {

@@ -111,6 +111,8 @@ th{color:var(--mut);font-weight:500;font-size:11.5px;text-transform:uppercase;le
 audio{width:100%;margin-top:8px;filter:saturate(.9)}
 .audio-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:13px}
 .audio-row .nm{color:var(--mut);min-width:140px}
+.audio-row.playing .nm{color:var(--accent)}
+.playlist-hint{font-size:12px;color:var(--mut2);margin:0 0 10px}
 .footer{grid-column:1/3;padding:9px 18px;border-top:1px solid var(--line);color:var(--mut2);
   font-size:11.5px;background:#0c121e;display:flex;align-items:center;gap:7px}
 .foot-dot{width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:.7}
@@ -263,7 +265,7 @@ window.openSession = async (id)=>{
       <table id="nearby"><thead><tr><th>Name</th><th>Address</th><th>Type</th><th>RSSI</th></tr></thead>
       <tbody>${nearbyRows(s.nearby)}</tbody></table>
     </div>
-    <div class="card"><h3>Saved recording${s.hasAudio?'':' — none'}</h3>
+    <div class="card"><h3>Saved audio${s.hasAudio?'':' — none'}</h3>
       <div id="audioList" class="mut" style="font-size:13px">${s.hasAudio?'Loading…':'No audio uploaded for this session.'}</div>
       <audio id="liveAudio" autoplay style="display:none"></audio>
     </div>`;
@@ -291,17 +293,59 @@ async function loadAudio(id){
     const {files} = await api(`/api/session/${id}/audio`);
     const box = $("#audioList"); if(!box) return;
     if(!files || !files.length){ box.innerHTML = '<span class="mut">No audio files.</span>'; return; }
-    const rec = files.find(f=>f.name.startsWith("recording"));
-    // Prefer the finalized full recording; otherwise show segment files
-    // (each segment is a complete file after the PWA recorder fix).
-    const ordered = rec ? [rec] : files.filter(f=>f.name.startsWith("chunk-"));
-    if(!ordered.length){ box.innerHTML = '<span class="mut">No playable audio yet.</span>'; return; }
-    box.innerHTML = ordered.map(f=>`
-      <div class="audio-row">
-        <span class="nm">${f.name.startsWith("recording")?"Full recording":("Segment "+f.name)}</span>
+    const recs = files.filter(f=>f.name.startsWith("recording"));
+    const chunks = files.filter(f=>f.name.startsWith("chunk-"));
+    // Keep BOTH: full recording (best-effort) and every chunk (source of truth / playlist).
+    if(!recs.length && !chunks.length){ box.innerHTML = '<span class="mut">No playable audio yet.</span>'; return; }
+    let html = "";
+    for (const f of recs){
+      html += `<div class="audio-row" data-kind="full">
+        <span class="nm">Full recording</span>
         <audio controls preload="metadata" src="${f.url}"></audio>
-      </div>`).join("");
+      </div>`;
+    }
+    if(chunks.length){
+      html += `<p class="playlist-hint">Chunks · playing continuously (auto-advances)</p>`;
+      html += `<div id="chunkPlaylist">` + chunks.map((f,i)=>`
+      <div class="audio-row" data-kind="chunk" data-idx="${i}">
+        <span class="nm">Chunk ${String(i+1).padStart(2,"0")} · ${f.name}</span>
+        <audio controls preload="metadata" data-chunk-idx="${i}" src="${f.url}"></audio>
+      </div>`).join("") + `</div>`;
+    }
+    box.innerHTML = html;
+    wireChunkPlaylist(box);
   }catch(e){ const box=$("#audioList"); if(box) box.innerHTML='<span class="mut">Could not load audio.</span>'; }
+}
+
+function wireChunkPlaylist(box){
+  const audios = [...box.querySelectorAll("audio[data-chunk-idx]")];
+  if(audios.length < 1) return;
+  audios.forEach((a, i)=>{
+    a.addEventListener("play", ()=>{
+      // Pause siblings (full recording + other chunks) so only one plays
+      box.querySelectorAll("audio").forEach(other=>{
+        if(other!==a && !other.paused){ try{ other.pause(); }catch{} }
+      });
+      box.querySelectorAll(".audio-row[data-kind=chunk]").forEach(r=>r.classList.remove("playing"));
+      const row = a.closest(".audio-row"); if(row) row.classList.add("playing");
+      const hint = box.querySelector(".playlist-hint");
+      if(hint) hint.textContent = `Playing continuously · chunk ${i+1} of ${audios.length}`;
+    });
+    a.addEventListener("ended", ()=>{
+      const next = audios[i+1];
+      if(!next){
+        const row = a.closest(".audio-row"); if(row) row.classList.remove("playing");
+        const hint = box.querySelector(".playlist-hint");
+        if(hint) hint.textContent = "Chunks · playing continuously (auto-advances)";
+        return;
+      }
+      try{
+        next.currentTime = 0;
+        const p = next.play();
+        if(p && p.catch) p.catch(err=>console.warn("playlist next", err));
+      }catch(err){ console.warn("playlist next", err); }
+    });
+  });
 }
 
 function attachRemoteAudio(trk){
@@ -348,7 +392,7 @@ function connectWS(){
     else if(m.type==="location" && m.sessionId===current){ const el=$("#loc"); if(el) el.textContent=fmtLoc(m.point); if(marker){marker.setLatLng([m.point.lat,m.point.lng]); map.setView([m.point.lat,m.point.lng]); if(track) track.addLatLng([m.point.lat,m.point.lng]);} }
     else if(m.type==="nearby" && m.sessionId===current){ const t=$("#nearby tbody"); if(t) t.innerHTML=nearbyRows(m.devices); }
     else if(m.type==="audio"){ const s=sessionsCache.find(x=>x.id===m.sessionId); if(s){s.hasAudio=true;} if(m.sessionId===current) loadAudio(current); renderList(); }
-    else if(m.type==="ended"){ if(m.session) upsert(m.session); else{ const s=sessionsCache.find(x=>x.id===m.sessionId); if(s){s.active=false;s.status="ended";} } renderList(); if(m.sessionId===current) openSession(current); }
+    else if(m.type==="ended"){ if(m.session) upsert(m.session); else{ const s=sessionsCache.find(x=>x.id===m.sessionId); if(s){s.active=false;s.status=m.by==="admin"?"ended by admin":"ended";} } if(m.sessionId===current && room){ try{ room.disconnect(); }catch{} room=null; const la=$("#liveAudio"); if(la){ la.srcObject=null; la.style.display="none"; } } renderList(); if(m.sessionId===current) openSession(current); }
   };
   ws.onclose = ()=> setTimeout(connectWS, 2000);
 }

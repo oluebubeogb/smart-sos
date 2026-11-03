@@ -222,6 +222,8 @@ let mediaStream = null;
 let recorder = null;
 let watchId = null;
 let uploadTimer = null;
+let statusPollTimer = null;
+let endingByAdmin = false;
 
 function setStatus(t){ const el=document.getElementById("status"); if(el) el.textContent=t; }
 
@@ -299,6 +301,7 @@ async function startSos(){
 
   // nearby: Web Bluetooth is opt-in; skip silently for PWA demo
   setStatus("Live · session "+sessionId);
+  startStatusPoll();
 }
 
 function pickMime(){
@@ -326,7 +329,7 @@ async function uploadBlob(blob){
   }catch(e){ console.warn("audio upload error", e); }
 }
 
-// Restart MediaRecorder every ~10s so each upload is a complete, playable file
+// Restart MediaRecorder every ~30s so each upload is a complete, playable file
 // (timeslice blobs after the first are not valid standalone WebM and play as 0:00).
 function startRecorder(){
   if(!mediaStream) return;
@@ -353,15 +356,39 @@ function startRecorder(){
         // start next segment after stop flushes
         setTimeout(startOne, 200);
       }
-    }, 10000);
+    }, 30000);
   };
   startOne();
 }
 
+
+function startStatusPoll(){
+  stopStatusPoll();
+  statusPollTimer = setInterval(async ()=>{
+    if(!active || !sessionId) return;
+    try{
+      const r = await fetch("/api/session/"+sessionId+"/status");
+      if(!r.ok) return;
+      const st = await r.json();
+      if(st && (st.active === false || (st.status && /ended by admin/i.test(st.status)))){
+        endingByAdmin = true;
+        setStatus("Ended by admin — stopping…");
+        await stopSos();
+      }
+    }catch{}
+  }, 3000);
+}
+function stopStatusPoll(){
+  if(statusPollTimer){ clearInterval(statusPollTimer); statusPollTimer=null; }
+}
+
 async function stopSos(){
   const btn = document.getElementById("sosBtn");
-  setStatus("Stopping…");
+  const byAdmin = endingByAdmin;
+  endingByAdmin = false;
+  if(!byAdmin) setStatus("Stopping…");
   active = false;
+  stopStatusPoll();
   if(uploadTimer){ clearTimeout(uploadTimer); uploadTimer=null; }
   if(recorder && recorder.state !== "inactive"){
     await new Promise((res)=>{
@@ -381,12 +408,14 @@ async function stopSos(){
   if(watchId!=null){ navigator.geolocation.clearWatch(watchId); watchId=null; }
 
   if(sessionId){
+    // Always finalize uploads; stop is idempotent if admin already ended the session.
     try{ await fetch("/api/session/"+sessionId+"/audio/finalize", {method:"POST"}); }catch{}
     try{ await fetch("/api/session/"+sessionId+"/stop", {method:"POST"}); }catch{}
   }
   const sid = sessionId; sessionId=null;
-  btn.classList.remove("on"); btn.textContent="SOS";
-  setStatus(sid ? ("Ended · "+sid) : "Idle");
+  if(btn){ btn.classList.remove("on"); btn.textContent="SOS"; }
+  if(byAdmin) setStatus(sid ? ("Ended by admin · "+sid) : "Ended by admin");
+  else setStatus(sid ? ("Ended · "+sid) : "Idle");
 }
 
 // install prompt
