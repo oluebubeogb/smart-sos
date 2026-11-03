@@ -600,8 +600,14 @@ function liveTileMaint(){
   const live=[...tileState.values()].filter(x=>x.live);
   // show live cams; if none live, show the most recent one (frozen) or the placeholder
   const ph=box.querySelector('[data-slot="__wait"]');
-  for(const st of tileState.values()) st.tile.style.display = st.live ? "" : "none";
-  if(!live.length){
+  // Non-live tiles are parked off-layout (not display:none) so the <video> keeps
+  // decoding and can flip to live as soon as frames arrive. Primary = live tile(s);
+  // if none live yet, show the most recently attached tile rather than a dead placeholder.
+  const park=(t,on)=>{ if(on){ t.style.cssText="position:absolute;left:-9999px;width:160px;height:120px;opacity:0"; } else t.style.cssText=""; };
+  const all=[...tileState.values()];
+  const fallback = !live.length && all.length ? all.reduce((a,b)=> (b.lastFrame>=a.lastFrame? b:a)) : null;
+  for(const st of all) park(st.tile, !(st.live || st===fallback && st.lastFrame>0));
+  if(!live.length && !(fallback && fallback.lastFrame>0)){
     if(ph) ph.style.display="";
     else box.insertAdjacentHTML("afterbegin", placeholderTile());
   } else if(ph) ph.style.display="none";
@@ -610,7 +616,7 @@ function ensureLiveTile(slot, label){
   const box = $("#liveTiles"); if(!box) return null;
   let st = tileState.get(slot);
   if(!st || !st.tile.isConnected){
-    const tile=document.createElement("div"); tile.className="live-tile"; tile.dataset.slot=slot; tile.style.display="none";
+    const tile=document.createElement("div"); tile.className="live-tile"; tile.dataset.slot=slot; tile.style.cssText="position:absolute;left:-9999px;width:160px;height:120px;opacity:0";
     box.appendChild(tile);
     st={tile, video:null, lastT:-1, lastFrame:0, live:false}; tileState.set(slot, st);
   }
@@ -663,7 +669,12 @@ window.startListen = async (id)=>{
   try{
     if(room){ try{ room.disconnect(); }catch{} room=null; }
     clearLiveTiles();
-    room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
+    // adaptiveStream MUST be off here: hidden (display:none) tiles report 0x0, so LiveKit
+    // paused those video tracks -> no frames ever arrived -> tile never became "live".
+    room = new LivekitClient.Room({ adaptiveStream: false, dynacast: false });
+    room.on(LivekitClient.RoomEvent.TrackPublished,(pub)=>{ try{ pub.setSubscribed && pub.setSubscribed(true); }catch{} });
+    room.on(LivekitClient.RoomEvent.TrackMuted, ()=> liveTileMaint());
+    room.on(LivekitClient.RoomEvent.TrackUnmuted, ()=> liveTileMaint());
     room.on(LivekitClient.RoomEvent.TrackSubscribed,(trk, pub)=> {
       if(trk.kind==='audio') attachRemoteAudio(trk);
       else if(trk.kind==='video') attachRemoteVideo(trk, pub);

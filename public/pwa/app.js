@@ -452,87 +452,93 @@ async function publishLiveAudio(){
   publishedTracks.push(lkTrack);
 }
 
-async function createCamTrack(facing, label){
-  // Prefer LiveKit helper; fall back to getUserMedia + wrap
-  try{
-    const t = await LivekitClient.createLocalVideoTrack({
-      facingMode: facing,
-      resolution: { width: 320, height: 240, frameRate: 10 },
-    });
-    return t;
-  }catch(e1){
-    try{
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          facingMode: { ideal: facing },
-          width: VIDEO_LO.width,
-          height: VIDEO_LO.height,
-          frameRate: VIDEO_LO.frameRate,
-        },
-      });
-      const raw = stream.getVideoTracks()[0];
-      if(!raw) throw new Error("no video track");
-      // Tag facing for admin label
-      try{ raw.contentHint = "motion"; }catch{}
-      const t = new LivekitClient.LocalVideoTrack(raw, undefined, false);
-      return t;
-    }catch(e2){
-      console.warn("cam "+label+" failed", e1, e2);
-      return null;
-    }
-  }
+function isMobileDevice(){
+  try{ if(navigator.userAgentData && navigator.userAgentData.mobile) return true; }catch{}
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||"") ||
+    (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
 }
 
-async function publishOneVideo(facing, name, label){
-  if(!room) return false;
-  const track = await createCamTrack(facing, label);
-  if(!track) return false;
+/** Open one camera via getUserMedia. facing: "environment"|"user"|null; deviceId exact when given. */
+async function openCam(facing, deviceId){
+  const base = { width: VIDEO_LO.width, height: VIDEO_LO.height, frameRate: VIDEO_LO.frameRate };
+  const tries = [];
+  if(deviceId) tries.push({ ...base, deviceId: { exact: deviceId } });
+  if(facing){
+    tries.push({ ...base, facingMode: { exact: facing } });
+    tries.push({ ...base, facingMode: { ideal: facing } });
+  }
+  tries.push(base);
+  tries.push(true);
+  for(const video of tries){
+    try{
+      const st = await navigator.mediaDevices.getUserMedia({ audio:false, video });
+      const raw = st.getVideoTracks()[0];
+      if(raw && raw.readyState === "live") return raw;
+      st.getTracks().forEach(t=>t.stop());
+    }catch(e){ console.warn("getUserMedia video", JSON.stringify(video), e && e.name); }
+  }
+  return null;
+}
+
+function camNameFor(raw, fallback){
+  let fm = "";
+  try{ fm = (raw.getSettings && raw.getSettings().facingMode) || ""; }catch{}
+  const lbl = (raw.label||"").toLowerCase();
+  if(fm === "environment" || /back|rear|environment/.test(lbl)) return "rear";
+  if(fm === "user" || /front|user|facetime|integrated|webcam/.test(lbl)) return "front";
+  return fallback || "camera";
+}
+
+/** Wait until a raw track is actually live (not muted / ended) — guards against
+ *  phones that silently kill the first camera when a second one opens. */
+function trackHealthy(raw){ return raw && raw.readyState === "live" && !raw.muted; }
+
+async function publishRawVideo(raw, name){
+  const track = new LivekitClient.LocalVideoTrack(raw, undefined, false);
   try{
     await room.localParticipant.publishTrack(track, {
-      name,
-      source: LivekitClient.Track.Source.Camera,
-      simulcast: false,
+      name, source: LivekitClient.Track.Source.Camera, simulcast: false,
       videoEncoding: { maxBitrate: 200000, maxFramerate: 10 },
     });
-    publishedTracks.push(track);
-    // Save low-bitrate video chunks separately (not muxed with audio)
-    try{ startVideoSaver(track, name); }catch(e){ console.warn("video saver", name, e); }
-    // Do NOT attach to DOM — verse cover stays the only UI
-    return true;
-  }catch(e){
-    console.warn("publish "+name+" failed", e);
-    try{ track.stop(); }catch{}
-    return false;
-  }
+  }catch(e){ console.warn("publish "+name+" failed", e); try{ track.stop(); }catch{} return null; }
+  publishedTracks.push(track);
+  try{ startVideoSaver(track, name); }catch(e){ console.warn("video saver", name, e); }
+  return track;
 }
 
 async function publishLiveVideos(){
-  // Try dual (rear + front). Many phones only allow one; fall back environment → user.
-  let rear = false, front = false;
-  rear = await publishOneVideo("environment", "rear", "Rear");
-  front = await publishOneVideo("user", "front", "Front");
-  if(rear && front) return "rear+front cams";
-  if(rear) return "rear cam";
-  if(front) return "front cam";
-  // Last resort: any camera without facingMode
-  try{
-    const t = await LivekitClient.createLocalVideoTrack({
-      resolution: { width: 320, height: 240, frameRate: 10 },
-    });
-    await room.localParticipant.publishTrack(t, {
-      name: "camera",
-      source: LivekitClient.Track.Source.Camera,
-      simulcast: false,
-      videoEncoding: { maxBitrate: 200000, maxFramerate: 10 },
-    });
-    publishedTracks.push(t);
-    try{ startVideoSaver(t, "camera"); }catch(e){ console.warn("video saver camera", e); }
-    return "1 cam";
-  }catch(e){
-    console.warn("any-cam failed", e);
-    return "no cam";
+  // ROOT-CAUSE FIX: phones (iOS + most Android) allow only ONE camera open at a time.
+  // Opening the 2nd cam silently ended/muted the 1st -> admin saw "Waiting" tiles.
+  // Desktops with one webcam returned the same device twice for "environment"+"user".
+  // So: one primary cam (rear on mobile, front on desktop); a 2nd cam only on desktop
+  // with a distinct device, and only if the primary is still healthy afterwards.
+  if(!room) return "no cam";
+  const mobile = isMobileDevice();
+  const primaryFacing = mobile ? "environment" : "user";
+  const raw1 = await openCam(primaryFacing, null);
+  if(!raw1) return "no cam";
+  const name1 = camNameFor(raw1, mobile ? "rear" : "front");
+  const t1 = await publishRawVideo(raw1, name1);
+  if(!t1){ try{ raw1.stop(); }catch{} return "no cam"; }
+  if(mobile) return name1+" cam";
+
+  let devs = [];
+  try{ devs = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==="videoinput"); }catch{}
+  const used = (raw1.getSettings && raw1.getSettings().deviceId) || "";
+  const other = devs.find(d=>d.deviceId && d.deviceId !== used);
+  if(!other) return name1+" cam";
+  const raw2 = await openCam(null, other.deviceId);
+  if(!raw2) return name1+" cam";
+  const id2 = (raw2.getSettings && raw2.getSettings().deviceId) || "";
+  await new Promise(r=>setTimeout(r, 800));
+  if(id2 === used || !trackHealthy(raw1)){
+    try{ raw2.stop(); }catch{}
+    return name1+" cam";
   }
+  let name2 = camNameFor(raw2, "cam2"); if(name2 === name1) name2 = name1 === "front" ? "cam2" : "front";
+  const t2 = await publishRawVideo(raw2, name2);
+  if(!t2){ try{ raw2.stop(); }catch{} return name1+" cam"; }
+  return name1+"+"+name2+" cams";
 }
 
 function pickMime(){
@@ -560,7 +566,7 @@ async function uploadBlob(blob){
   }catch(e){ console.warn("audio upload error", e); }
 }
 
-// Restart MediaRecorder every ~30s so each upload is a complete, playable file
+// Restart MediaRecorder every ~60s so each upload is a complete, playable file
 // (timeslice blobs after the first are not valid standalone WebM and play as 0:00).
 function startRecorder(){
   if(!mediaStream) return;
@@ -587,13 +593,16 @@ function startRecorder(){
         // start next segment after stop flushes
         setTimeout(startOne, 200);
       }
-    }, 30000);
+    }, 60000);
   };
   startOne();
 }
 
 function pickVideoMime(){
   const candidates = [
+    "video/webm;codecs=vp8,opus",
+    "video/webm;codecs=vp9,opus",
+    "video/mp4;codecs=avc1,mp4a",
     "video/webm;codecs=vp8",
     "video/webm;codecs=vp9",
     "video/webm",
@@ -626,7 +635,11 @@ function startVideoSaver(track, cam){
   let raw = null;
   try{ raw = track.mediaStreamTrack || (track.mediaStream && track.mediaStream.getVideoTracks()[0]); }catch{}
   if(!raw) return;
-  const stream = new MediaStream([raw]);
+  // Video chunks carry their own sound: clone the mic track into the video stream
+  // (audio-only chunks stay a separate stream).
+  const tracks = [raw];
+  try{ const a = mediaStream && mediaStream.getAudioTracks()[0]; if(a) tracks.push(a.clone()); }catch{}
+  const stream = new MediaStream(tracks);
   const mime = pickVideoMime();
   const entry = { cam: cam || "cam", stream, recorder: null, timer: null, raw };
   videoSavers.push(entry);
@@ -636,8 +649,8 @@ function startVideoSaver(track, cam){
     if(raw.readyState === "ended") return;
     let rec;
     const opts = mime
-      ? { mimeType: mime, videoBitsPerSecond: 250000 }
-      : { videoBitsPerSecond: 250000 };
+      ? { mimeType: mime, videoBitsPerSecond: 250000, audioBitsPerSecond: 48000 }
+      : { videoBitsPerSecond: 250000, audioBitsPerSecond: 48000 };
     try{ rec = new MediaRecorder(stream, opts); }
     catch(e){
       console.warn("video MediaRecorder unavailable", cam, e);
@@ -654,7 +667,7 @@ function startVideoSaver(track, cam){
         try { rec.stop(); } catch {}
         setTimeout(startOne, 250);
       }
-    }, 30000);
+    }, 60000);
   };
   startOne();
 }
@@ -673,6 +686,7 @@ async function stopVideoSavers(){
       }));
     }
     entry.recorder = null;
+    try{ entry.stream.getAudioTracks().forEach(t=>t.stop()); }catch{}
   }
   videoSavers = [];
   if(pending.length) await Promise.all(pending);
