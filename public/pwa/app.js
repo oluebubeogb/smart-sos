@@ -114,35 +114,9 @@ function applyDecoy(d){
 
 function renderChrome(d){
   const main = document.getElementById("main");
-  if(d.theme === "calc"){
-    main.innerHTML = `
-      <div class="calc">
-        <div class="screen" id="screen">0</div>
-        <div class="keys">
-          ${["C","÷","×","⌫","7","8","9","-","4","5","6","+","1","2","3","=","0",".","%","±"].map(k=>{
-            const cls = "key" + (["÷","×","-","+","%","±"].includes(k)?" op":"") + (k==="="?" eq":"");
-            return `<div class="${cls}" data-k="${k}">${k}</div>`;
-          }).join("")}
-        </div>
-      </div>
-      <div class="sos-zone">
-        <button class="sos-btn" id="sosBtn">SOS</button>
-        <div class="status" id="status"></div>
-      </div>`;
-    wireCalc();
-  } else {
-    main.innerHTML = `
-      <div class="notes">
-        <textarea id="note" placeholder="Write a note…"></textarea>
-      </div>
-      <div class="sos-zone">
-        <button class="sos-btn" id="sosBtn">SOS</button>
-        <div class="status" id="status"></div>
-      </div>`;
-    const note = document.getElementById("note");
-    note.value = localStorage.getItem("nss_note")||"";
-    note.oninput = ()=> localStorage.setItem("nss_note", note.value);
-  }
+  main.innerHTML = `
+    <button class="sos-btn" id="sosBtn">SOS</button>
+    <div class="status" id="status"></div>`;
   wireSosButton();
 }
 
@@ -173,7 +147,7 @@ async function enableProtection(){
       audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},
       video:false,
     });
-    stream.getTracks().forEach(t=>t.stop()); // grant only — don't keep mic open
+    stream.getTracks().forEach(t=>t.stop());
   }catch(e){
     btn.disabled = false;
     setStatus("Mic needed for SOS: "+e.message);
@@ -181,9 +155,7 @@ async function enableProtection(){
   }
   try{
     await new Promise((res,rej)=> navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true,timeout:10000}));
-  }catch(e){
-    // location optional but we still try once during onboarding
-  }
+  }catch(e){}
   localStorage.setItem("nss_ready","1");
   btn.disabled = false;
   btn.textContent = "SOS";
@@ -191,27 +163,159 @@ async function enableProtection(){
   setStatus("You're protected — tap SOS for your first alert");
 }
 
-function wireCalc(){
-  let expr="";
-  const screen = document.getElementById("screen");
-  document.querySelectorAll(".key").forEach(el=>{
-    el.onclick = ()=>{
-      const k = el.dataset.k;
-      if(k==="C"){ expr=""; screen.textContent="0"; return; }
-      if(k==="⌫"){ expr=expr.slice(0,-1); screen.textContent=expr||"0"; return; }
-      if(k==="="){
-        try{
-          const safe = expr.replace(/×/g,"*").replace(/÷/g,"/").replace(/±/g,"-");
-          // eslint-disable-next-line no-new-func
-          const v = Function('"use strict";return ('+safe+')')();
-          expr = String(v); screen.textContent=expr; 
-        }catch{ screen.textContent="Err"; expr=""; }
-        return;
-      }
-      expr += k==="×"?"×":k==="÷"?"÷":k;
-      screen.textContent = expr;
-    };
-  });
+// ---- Quote cover (active SOS) ----
+const QUOTES = [
+  {t:"The Lord is my shepherd; I shall not want.", c:"Psalm 23:1"},
+  {t:"Be strong and courageous. Do not be afraid.", c:"Joshua 1:9"},
+  {t:"I can do all things through Christ who strengthens me.", c:"Philippians 4:13"},
+  {t:"God is our refuge and strength, a very present help in trouble.", c:"Psalm 46:1"},
+  {t:"Peace I leave with you; my peace I give to you.", c:"John 14:27"},
+  {t:"Cast all your anxiety on him, because he cares for you.", c:"1 Peter 5:7"},
+  {t:"The Lord will fight for you; you need only to be still.", c:"Exodus 14:14"},
+  {t:"Fear not, for I am with you.", c:"Isaiah 41:10"},
+  {t:"He will cover you with his feathers, and under his wings you will find refuge.", c:"Psalm 91:4"},
+  {t:"Come to me, all who labor and are heavy laden, and I will give you rest.", c:"Matthew 11:28"},
+  {t:"The light shines in the darkness, and the darkness has not overcome it.", c:"John 1:5"},
+  {t:"Be still, and know that I am God.", c:"Psalm 46:10"},
+  {t:"Love is patient and kind.", c:"1 Corinthians 13:4"},
+  {t:"Trust in the Lord with all your heart.", c:"Proverbs 3:5"},
+  {t:"Your word is a lamp to my feet and a light to my path.", c:"Psalm 119:105"},
+  {t:"For God so loved the world that he gave his only Son.", c:"John 3:16"},
+  {t:"The joy of the Lord is your strength.", c:"Nehemiah 8:10"},
+  {t:"Ask, and it will be given to you; seek, and you will find.", c:"Matthew 7:7"},
+  {t:"I am with you always, to the end of the age.", c:"Matthew 28:20"},
+  {t:"Let not your hearts be troubled. Believe in God.", c:"John 14:1"},
+  {t:"We walk by faith, not by sight.", c:"2 Corinthians 5:7"},
+  {t:"Blessed are the peacemakers.", c:"Matthew 5:9"},
+  {t:"His mercies are new every morning.", c:"Lamentations 3:23"},
+  {t:"In quietness and in trust shall be your strength.", c:"Isaiah 30:15"},
+  {t:"The Lord is near to the brokenhearted.", c:"Psalm 34:18"},
+  {t:"Rejoice in hope, be patient in tribulation.", c:"Romans 12:12"},
+  {t:"Do not be overcome by evil, but overcome evil with good.", c:"Romans 12:21"},
+  {t:"Greater love has no one than this.", c:"John 15:13"},
+  {t:"This is the day that the Lord has made; let us rejoice.", c:"Psalm 118:24"},
+  {t:"My grace is sufficient for you.", c:"2 Corinthians 12:9"},
+  {t:"Wait for the Lord; be strong, and let your heart take courage.", c:"Psalm 27:14"},
+  {t:"He makes me lie down in green pastures.", c:"Psalm 23:2"},
+  {t:"You are the light of the world.", c:"Matthew 5:14"},
+  {t:"With God all things are possible.", c:"Matthew 19:26"},
+  {t:"The Lord bless you and keep you.", c:"Numbers 6:24"},
+];
+
+let quoteTimer = null;
+let holdStart = 0;
+let holdRaf = null;
+let holding = false;
+const HOLD_MS = 8000;
+const CIRC = 2 * Math.PI * 24;
+
+function pickQuote(){
+  return QUOTES[Math.floor(Math.random()*QUOTES.length)];
+}
+
+function showQuote(animate){
+  const q = pickQuote();
+  const el = document.getElementById("coverQuote");
+  const cite = document.getElementById("coverCite");
+  if(!el) return;
+  if(animate){
+    el.classList.add("fade");
+    setTimeout(()=>{ el.textContent = "“"+q.t+"”"; cite.textContent = q.c; el.classList.remove("fade"); }, 550);
+  } else {
+    el.textContent = "“"+q.t+"”";
+    cite.textContent = q.c;
+  }
+}
+
+function setHoldProgress(p){
+  const fg = document.getElementById("holdFg");
+  if(!fg) return;
+  const clamped = Math.max(0, Math.min(1, p));
+  fg.style.strokeDashoffset = String(CIRC * (1 - clamped));
+}
+
+function showCover(){
+  const cover = document.getElementById("cover");
+  if(!cover) return;
+  cover.classList.add("show");
+  cover.setAttribute("aria-hidden","false");
+  showQuote(false);
+  setHoldProgress(0);
+  if(quoteTimer) clearInterval(quoteTimer);
+  quoteTimer = setInterval(()=> showQuote(true), 25000);
+  bindHold(true);
+}
+
+function hideCover(){
+  const cover = document.getElementById("cover");
+  if(cover){ cover.classList.remove("show"); cover.setAttribute("aria-hidden","true"); }
+  if(quoteTimer){ clearInterval(quoteTimer); quoteTimer=null; }
+  bindHold(false);
+  cancelHold();
+  setHoldProgress(0);
+}
+
+function cancelHold(){
+  holding = false;
+  holdStart = 0;
+  if(holdRaf){ cancelAnimationFrame(holdRaf); holdRaf=null; }
+  setHoldProgress(0);
+}
+
+function tickHold(){
+  if(!holding) return;
+  const p = (performance.now() - holdStart) / HOLD_MS;
+  setHoldProgress(p);
+  if(p >= 1){
+    cancelHold();
+    stopSos();
+    return;
+  }
+  holdRaf = requestAnimationFrame(tickHold);
+}
+
+function beginHold(e){
+  if(!active) return;
+  if(e && e.preventDefault) e.preventDefault();
+  if(holding) return;
+  holding = true;
+  holdStart = performance.now();
+  holdRaf = requestAnimationFrame(tickHold);
+}
+
+function endHold(e){
+  if(e && e.preventDefault) e.preventDefault();
+  cancelHold();
+}
+
+let holdBound = false;
+function onKeyDown(e){
+  if(e.code === "Space" || e.key === " "){ if(!e.repeat) beginHold(e); }
+}
+function onKeyUp(e){
+  if(e.code === "Space" || e.key === " ") endHold(e);
+}
+
+function bindHold(on){
+  const cover = document.getElementById("cover");
+  if(!cover) return;
+  if(on && !holdBound){
+    cover.addEventListener("pointerdown", beginHold);
+    cover.addEventListener("pointerup", endHold);
+    cover.addEventListener("pointercancel", endHold);
+    cover.addEventListener("pointerleave", endHold);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    holdBound = true;
+  } else if(!on && holdBound){
+    cover.removeEventListener("pointerdown", beginHold);
+    cover.removeEventListener("pointerup", endHold);
+    cover.removeEventListener("pointercancel", endHold);
+    cover.removeEventListener("pointerleave", endHold);
+    window.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener("keyup", onKeyUp);
+    holdBound = false;
+  }
 }
 
 // ---- SOS session ----
@@ -228,7 +332,7 @@ let endingByAdmin = false;
 function setStatus(t){ const el=document.getElementById("status"); if(el) el.textContent=t; }
 
 async function toggleSos(){
-  if(active) return stopSos();
+  if(active) return; // end only via 8s hold on cover (or admin)
   await startSos();
 }
 
@@ -267,7 +371,8 @@ async function startSos(){
   sessionId = data.sessionId;
   active = true;
   btn.classList.add("on");
-  btn.textContent = "STOP";
+  btn.textContent = "SOS";
+  showCover();
 
   // LiveKit publish — use LiveKit's own mic track (don't wrap the MediaRecorder stream)
   try{
@@ -413,7 +518,8 @@ async function stopSos(){
     try{ await fetch("/api/session/"+sessionId+"/stop", {method:"POST"}); }catch{}
   }
   const sid = sessionId; sessionId=null;
-  if(btn){ btn.classList.remove("on"); btn.textContent="SOS"; }
+  hideCover();
+  if(btn){ btn.classList.remove("on"); btn.textContent="SOS"; btn.onclick = toggleSos; }
   if(byAdmin) setStatus(sid ? ("Ended by admin · "+sid) : "Ended by admin");
   else setStatus(sid ? ("Ended · "+sid) : "Idle");
 }
