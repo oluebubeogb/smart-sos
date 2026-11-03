@@ -34,7 +34,6 @@ window.ssosNav = ()=>`
   <div class="sbhead">
     <img class="sbicon" src="/icon.png" alt="Smart SOS" title="Smart SOS">
     <span class="sbname">Smart SOS</span>
-    <button class="sbtog" onclick="toggleSidebar()" title="${SSOS.collapsed?'Expand sidebar':'Collapse sidebar'}">${ICONS.collapse}</button>
   </div>
   <nav class="nav">
     ${nvItem(SSOS.page==='sessions'&&window.__filter()==='live',"goSessions('live')","live","Live",'<span class="n" id="n-live"></span>')}
@@ -267,6 +266,11 @@ const css=document.createElement("style"); css.textContent=`
 .sbtog{margin-left:auto;width:28px;height:28px;border-radius:8px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);color:#a9b1c3;display:grid;place-items:center;cursor:pointer;transition:transform .2s,background .15s}
 .sbtog:hover{background:rgba(255,77,94,.14);color:#fff}
 .shell.has-sess{grid-template-columns:230px 300px 1fr}
+.navbar{position:relative;overflow:visible!important;z-index:5}
+.sbedge{position:absolute;top:58px;right:-12px;width:24px;height:24px;border-radius:50%;border:1px solid rgba(255,255,255,.14);background:#141b2a;color:#c3cada;display:grid;place-items:center;cursor:pointer;padding:0;z-index:20;box-shadow:0 2px 8px rgba(0,0,0,.45);transition:transform .2s,background .15s}
+.sbedge svg{width:14px;height:14px}.sbedge:hover{background:#e82d3f;color:#fff;border-color:#e82d3f}
+.shell.collapsed .sbedge{transform:rotate(180deg)}
+.footuser{font-weight:700;color:#e8ecf4;font-size:12.5px;margin-right:10px}.footer .btn{font-weight:700}
 .sessbar{background:#0a101b}.sesshead{padding:14px 12px 8px;font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:#8a93a6;font-weight:600}
 .hint{margin-top:4px;font-size:11.5px;color:#8a93a6;line-height:1.35;max-width:320px}
 .shell{transition:grid-template-columns .2s ease}

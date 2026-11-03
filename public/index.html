@@ -61,14 +61,7 @@ let sessionsCache = [];
 
 // ---- dashboard CSS injected at runtime ----
 const DASH_CSS = `
-.shell{display:grid;grid-template-columns:230px 1fr;grid-template-rows:auto 1fr auto;height:100vh}
-.topbar{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:6px 14px;
-  background:#0e1320;border-bottom:1px solid var(--line)}
-.topbar .mark{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#b0323f);
-  display:grid;place-items:center;box-shadow:0 6px 16px -8px var(--accent)}
-.topbar .mark span{width:8px;height:8px;border-radius:50%;background:#fff}
-.topbar h1{font-size:15px;margin:0;font-weight:700;letter-spacing:-.2px}
-.topbar .sp{flex:1}
+.shell{display:grid;grid-template-columns:230px 1fr;grid-template-rows:1fr auto;height:100vh}
 .sidebar{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:#0c121e}
 .segs{display:flex;gap:6px;padding:12px}
 .seg{flex:1;text-align:center;padding:8px;border-radius:9px;font-size:13px;cursor:pointer;color:var(--mut);
@@ -216,13 +209,9 @@ function renderApp(){
   injectCSS();
   document.getElementById("app").innerHTML = `
   <div class="shell${SSOS.collapsed?' collapsed':''}${SSOS.page==='sessions'?' has-sess':''}">
-    <div class="topbar">
-      <div class="sp"></div>
-      <span class="mut" style="font-size:12.5px;margin-right:10px">${(window.SSOS&&SSOS.me)?SSOS.me.username+(SSOS.me.role==='super'?' · superadmin':''):''}</span>
-      <button class="btn" onclick="logout()">Log out</button>
-    </div>
     <div class="sidebar navbar">
       ${ssosNav()}
+      <button class="sbedge" onclick="toggleSidebar()" title="${SSOS.collapsed?'Expand sidebar':'Collapse sidebar'}">${ICONS.collapse}</button>
     </div>
     ${SSOS.page==='sessions'?`<div class="sidebar sessbar">
       <div class="sesshead">${filter==='live'?'Live':'History'}</div>
@@ -230,7 +219,7 @@ function renderApp(){
       <div class="list" id="list"></div>
     </div>`:'<div id="list" style="display:none"></div>'}
     <div class="detail" id="detail"><div class="empty"><div>Select an alert to view its session.</div></div></div>
-    <div class="footer"><span class="foot-dot"></span>Smart SOS</div>
+    <div class="footer"><span class="foot-dot"></span>Smart SOS<span class="sp" style="flex:1"></span><span class="footuser">${(window.SSOS&&SSOS.me)?SSOS.me.username+' · '+(SSOS.me.role==='super'?'superadmin':'admin'):''}</span><button class="btn" onclick="logout()">Log out</button></div>
   </div>`;
   if(search) $("#search").value = search;
   renderList();
