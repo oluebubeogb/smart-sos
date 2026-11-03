@@ -83,8 +83,8 @@ function decrypt(blob) {
     return Buffer.concat([d.update(enc), d.final()]).toString("utf8");
   } catch { return null; }
 }
-function slugify(v) { return String(v || "").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 20) || "partner"; }
-const genApiKey = (slug) => "ssos_live_" + slugify(slug) + "_" + hex(16);
+function slugify(v) { return String(v || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 40).replace(/-$/, "") || "partner"; }
+const genApiKey = (slug) => "ssos_live_" + slugify(slug).replace(/-/g, "").slice(0, 20) + "_" + hex(16);
 const genReadToken = () => "ssos_pub_" + hex(12);
 const genWebhookSecret = () => "whsec_" + hex(24);
 const keyPrefix = (k) => k.slice(0, k.lastIndexOf("_") + 7) + "…";
@@ -455,6 +455,40 @@ app.post("/api/sos", async (req, res) => {
   const lk = await mintFor(s, "device-" + s.deviceId, { canPublish: true, canSubscribe: false });
   broadcast({ type: "alert", session: publicSession(s) });
   res.json({ sessionId: id, room: s.room, livekitUrl: LIVEKIT_URL, token: lk.token, expiresAt: lk.expiresAt, ttlSeconds: lk.ttlSeconds });
+});
+
+// ---- org-scoped test PWA (/pwa?org=<partner-slug>) — no API key in browser ----
+function keyForOrg(slug) {
+  const org = String(slug || "").toLowerCase().trim();
+  if (!org) return null;
+  for (const k of keysById.values()) if (k.partner === org && k.enabled !== false && !k.deleted_at) return k;
+  return null;
+}
+app.get("/api/pwa/org/:slug", (req, res) => {
+  const k = keyForOrg(req.params.slug);
+  if (!k) return res.status(404).json({ ok: false, error: "unknown_org", message: "No enabled organisation with slug '" + req.params.slug + "'" });
+  res.json({ ok: true, orgName: k.org_name, partner: k.partner });
+});
+app.post("/api/pwa/sos", async (req, res) => {
+  const { org, deviceId, decoyName, lat, lng, acc } = req.body || {};
+  const k = keyForOrg(org);
+  if (!k) return res.status(404).json({ error: "unknown_org", message: "No enabled organisation with slug '" + (org || "") + "'" });
+  const id = crypto.randomUUID().slice(0, 8);
+  const s = {
+    id, deviceId: String(deviceId || "unknown-device").slice(0, 128), decoyName: String(decoyName || k.org_name || "App").slice(0, 80),
+    source: "pwa", partner: k.partner, keyId: k.id, ownerAdminId: k.owner_admin_id || null, externalRef: null, user: null, metadata: { test_pwa: true },
+    callbackUrl: null, room: newRoomName(id), createdAt: Date.now(), endedAt: null, active: true,
+    status: "SOS triggered (pwa test · " + k.partner + ")", locations: [], nearby: [], audioFiles: [], videoFiles: [], events: [],
+  };
+  if (typeof lat === "number" && typeof lng === "number") s.locations.push({ lat, lng, acc: acc ?? null, ts: Date.now() });
+  sessions.set(id, s);
+  await persist(s);
+  if (s.locations.length) bg(db.addLocations(id, s.locations));
+  await lkCreateRoom(s.room);
+  const lk = await mintFor(s, "device-" + s.deviceId, { canPublish: true, canSubscribe: false });
+  broadcast({ type: "alert", session: publicSession(s) });
+  try { notifyPartner(s, "session.created"); } catch {}
+  res.json({ sessionId: id, room: s.room, livekitUrl: LIVEKIT_URL, token: lk.token, expiresAt: lk.expiresAt, ttlSeconds: lk.ttlSeconds, org: k.partner, orgName: k.org_name });
 });
 
 function addLocationPoints(s, pts) {

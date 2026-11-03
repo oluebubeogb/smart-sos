@@ -419,7 +419,7 @@ async function loadVideo(id){
           <button type="button" class="expand-btn" data-idx="${i}" title="Expand">${keepOpen.has(f.url)?"▴":"▾"}</button>
         </div>
         <div class="chunk-body">
-          <video controls preload="metadata" data-chunk-idx="${i}" src="${f.url}" playsinline></video>
+          <video controls preload="metadata" data-chunk-idx="${i}" src="${f.url}" playsinline data-saved="1"></video>
         </div>
       </div>`;
     }).join("") + `</div>`;
@@ -466,7 +466,9 @@ function wireCompact(box, kind){
   });
 }
 
+function unmuteSaved(v){ if(!v || v.tagName!=="VIDEO" || !v.hasAttribute("data-saved")) return; try{ v.removeAttribute("muted"); v.defaultMuted=false; v.muted=false; v.volume=1; }catch{} }
 function wireCondensedControls(box){
+  box.querySelectorAll("video[data-saved]").forEach(v=>{ unmuteSaved(v); v.addEventListener("loadedmetadata",()=>unmuteSaved(v)); v.addEventListener("play",()=>unmuteSaved(v)); });
   box.querySelectorAll(".mini-play").forEach(btn=>{
     btn.addEventListener("click", (ev)=>{
       ev.stopPropagation();
@@ -476,6 +478,7 @@ function wireCondensedControls(box){
       const row = btn.closest(".chunk-row");
       if(au.tagName==="VIDEO" && row && !row.classList.contains("expanded")){ row.classList.add("expanded"); const eb=row.querySelector(".expand-btn"); if(eb) eb.textContent="▴"; }
       if(au.paused){
+        unmuteSaved(au);
         const p = au.play(); if(p&&p.catch)p.catch(()=>{});
         btn.textContent = "❚❚";
       } else {

@@ -1,3 +1,13 @@
+// Org-scoped test mode: /pwa?org=<partner-slug> → session belongs to that partner (no API key in browser)
+const TEST_ORG = (()=>{ try{ return (new URLSearchParams(location.search).get("org")||"").toLowerCase().replace(/[^a-z0-9-]/g,"").slice(0,40); }catch{ return ""; } })();
+if(TEST_ORG){
+  fetch("/api/pwa/org/"+encodeURIComponent(TEST_ORG)).then(r=>r.json()).then(d=>{
+    const b=document.createElement("div");
+    b.style.cssText="position:fixed;top:8px;right:8px;z-index:9999;background:#b91c1c;color:#fff;font:600 12px system-ui;padding:4px 8px;border-radius:999px;opacity:.9";
+    b.textContent = d && d.ok ? "Testing as "+d.orgName : "Unknown org: "+TEST_ORG;
+    document.body.appendChild(b);
+  }).catch(()=>{});
+}
 // Decoy PWA for Smart SOS
 const DECOYS = [
   {name:"Utilities", color:"#4c8dff", theme:"calc"},
@@ -382,10 +392,11 @@ async function startSos(){
   setStatus("Opening session…");
   let data;
   try{
-    const r = await fetch("/api/sos", {
+    const r = await fetch(TEST_ORG ? "/api/pwa/sos" : "/api/sos", {
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
+        org: TEST_ORG || undefined,
         deviceId: getDeviceId(),
         decoyName: decoy.name,
         lat, lng, acc,
@@ -648,10 +659,17 @@ function startVideoSaver(track, cam){
   const entry = { cam: cam || "cam", stream: null, recorder: null, timer: null, raw: null, fails: 0 };
   videoSavers.push(entry);
   const curRaw = ()=>{ try{ return track.mediaStreamTrack || (track.mediaStream && track.mediaStream.getVideoTracks()[0]); }catch{ return null; } };
-  const buildStream = ()=>{
+  const buildStream = async ()=>{
     const r = curRaw(); if(!r || r.readyState === "ended") return null;
     const v = r.clone(); const tracks = [v];
-    try{ const a = mediaStream && mediaStream.getAudioTracks()[0]; if(a && a.readyState==="live") tracks.push(a.clone()); }catch{}
+    let a2 = null;
+    try{ const a = mediaStream && mediaStream.getAudioTracks()[0]; if(a && a.readyState==="live") a2 = a.clone(); }catch{}
+    if(!a2 || a2.readyState !== "live"){
+      // clone failed / no live mic on shared stream → fresh mic track just for this recorder
+      try{ const st = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true } }); a2 = st.getAudioTracks()[0] || null; }
+      catch(e){ console.warn("video saver mic", e && e.name); a2 = null; }
+    }
+    if(a2) tracks.push(a2);
     return new MediaStream(tracks);
   };
   const makeRec = (stream)=>{
@@ -665,13 +683,16 @@ function startVideoSaver(track, cam){
     return null;
   };
   const cleanup = (st)=>{ try{ st && st.getTracks().forEach(t=>t.stop()); }catch{} };
-  const startOne = ()=>{
+  const startOne = async ()=>{
     if(!active || !sessionId) return;
-    let stream = buildStream();
+    let stream = await buildStream();
     if(!stream){ if(++entry.fails < 20) entry.timer = setTimeout(startOne, 3000); return; }
     let rec = makeRec(stream);
-    if(!rec && stream.getAudioTracks().length){ // retry video-only
+    if(!rec && stream.getAudioTracks().length){ // last resort: video-only (surfaced)
       stream.getAudioTracks().forEach(t=>t.stop()); stream = new MediaStream(stream.getVideoTracks()); rec = makeRec(stream);
+      if(rec) setStatus("Saved video is video-only on this device (audio still saved separately)");
+    } else if(rec && !stream.getAudioTracks().length){
+      setStatus("Mic unavailable — saved video has no sound (live continues)");
     }
     if(!rec){ cleanup(stream); setStatus("Video save unavailable on this device (live + audio continue)"); return; }
     entry.stream = stream; entry.recorder = rec; entry.fails = 0;

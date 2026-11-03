@@ -67,7 +67,7 @@ async function renderKeys(el){
   $("#keysBody").innerHTML = !keys.length?`<div class="emptybox">No partner keys yet. Create one to let a partner app send SOS alerts.</div>`:`
   <table class="tbl"><thead><tr><th>Organisation</th><th>API key</th><th>Webhook</th><th>Sessions</th><th>Last used</th>${isSuper()?'<th>Created by</th>':''}<th>Status</th><th></th></tr></thead><tbody>
   ${keys.map(k=>`<tr>
-    <td><b>${esc(k.orgName)}</b><div class="mut sm">${esc(k.partner)}${k.imported?' · imported from env':''}</div></td>
+    <td><b>${esc(k.orgName)}</b><div class="mut sm">${esc(k.partner)}${k.imported?' · imported from env':''}</div><div class="sm"><a href="/pwa?org=${encodeURIComponent(k.partner)}" target="_blank" rel="noopener">/pwa?org=${esc(k.partner)}</a> <button class="btn sm" onclick="copyText(location.origin+'/pwa?org='+${esc(JSON.stringify(k.partner))},this)">Copy</button></div></td>
     <td><code>${esc(k.keyPrefix)}</code></td>
     <td class="sm">${k.webhookUrl?esc(k.webhookUrl):'<span class="mut">—</span>'}</td>
     <td>${k.sessionCount}${k.activeCount?` <span class="pill live">${k.activeCount} live</span>`:''}</td>
@@ -111,6 +111,7 @@ window.manageKey=async(id)=>{
   const k=(window.__keys||[]).find(x=>x.id===id); if(!k) return;
   modal(`<h3>${esc(k.orgName)} <span class="mut sm">${esc(k.partner)}</span></h3>
     <div class="tabs"><span class="on">Settings</span></div>
+    ${secretRow("Test link (SOS test PWA as this org)",location.origin+"/pwa?org="+k.partner,"Opens the SOS test PWA as this organisation; live + ~60s saved audio/video land on this partner's sessions. LiveKit alone does not create saved chunks — partner apps must POST ~60s complete WebM/MP4 clips (audio ≤25MB, video ≤40MB) or use this link.")}
     <label>Organisation name</label><input id="mOrg" value="${esc(k.orgName)}">
     <label>Webhook URL</label><input id="mHook" value="${esc(k.webhookUrl||'')}">
     <label>Allowed origins (display feed)</label><input id="mOrig" value="${esc((k.allowedOrigins||[]).join(', '))}">
@@ -185,6 +186,9 @@ async function renderDocs(el){
   const P=host+"/api/partner/v1";
   el.innerHTML=`<div class="page docs"><h2>Docs</h2>
   <p class="mut">Integration guide for your partners. Keys below are masked — use <b>Partners &amp; Keys → Manage → Reveal</b> to copy the real values.${keys.length>1?` Showing <b>${esc(k.orgName)}</b>.`:''}</p>
+  <div class="card"><h3>Test link &amp; saved clips</h3>
+  <p class="sm">Test without code: <code>${location.origin}/pwa?org=${esc(k.partner||'your-org')}</code> opens the SOS test PWA as this organisation (no API key in the browser) — live A/V plus ~60s saved audio/video land on its sessions.</p>
+  <p class="sm"><b>LiveKit alone does not create saved chunks.</b> Apps must POST ~60s complete WebM/MP4 clips to <code>/sessions/:id/audio</code> (≤25MB) and <code>/sessions/:id/video</code> (≤40MB), or archives stay empty.</p></div>
   <div class="card"><h3>1 · Send SOS (partner server → Smart SOS)</h3>
   <p class="sm">Authenticate every call with <code>X-API-Key</code>. Keep the API key on the partner's <b>server</b>, never in a browser or app bundle.</p>
 <pre>curl ${P}/ping -H "X-API-Key: ${KEY}"
