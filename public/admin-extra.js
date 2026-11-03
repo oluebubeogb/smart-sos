@@ -1,4 +1,4 @@
-// Smart SOS - Admin: extra pages (Partners & Keys, Docs, Admins, Account) + nav
+// Smart SOS admin: extra pages (Partners & Keys, Docs, Admins, Account) + nav
 (function(){
 const $=(s,r=document)=>r.querySelector(s);
 const esc=(v)=>String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -31,8 +31,9 @@ window.SSOS.collapsed = (()=>{ try{ return localStorage.getItem("ssos_sidebar_co
 window.toggleSidebar = ()=>{ SSOS.collapsed=!SSOS.collapsed; try{ localStorage.setItem("ssos_sidebar_collapsed",SSOS.collapsed?"1":"0"); }catch{} window.__rerender(); };
 const nvItem=(on,click,icon,label,extra="")=>`<div class="nv ${on?'on':''}" onclick="${click}" title="${label.replace(/&amp;/g,'&')}"><span class="ni">${ICONS[icon]}</span><span class="nl">${label}</span>${extra}</div>`;
 window.ssosNav = ()=>`
-  <div class="sbtop">
+  <div class="sbhead">
     <img class="sbicon" src="/icon.png" alt="Smart SOS" title="Smart SOS">
+    <span class="sbname">Smart SOS</span>
     <button class="sbtog" onclick="toggleSidebar()" title="${SSOS.collapsed?'Expand sidebar':'Collapse sidebar'}">${ICONS.collapse}</button>
   </div>
   <nav class="nav">
@@ -45,7 +46,7 @@ window.ssosNav = ()=>`
     ${nvItem(SSOS.page==='trash',"goPage('trash')","trash","Trash")}
   </nav>`;
 window.goPage = (p)=>{ SSOS.page=p; window.__rerender(); };
-window.goSessions = (f)=>{ SSOS.page="sessions"; if(SSOS.collapsed){ SSOS.collapsed=false; try{ localStorage.setItem("ssos_sidebar_collapsed","0"); }catch{} } window.setFilter(f); };
+window.goSessions = (f)=>{ SSOS.page="sessions"; window.setFilter(f); };
 
 function modal(html){
   closeModal();
@@ -260,19 +261,23 @@ const css=document.createElement("style"); css.textContent=`
 .nv:hover{background:rgba(255,255,255,.04);color:#e8ecf4}.nv.on{background:rgba(255,77,79,.12);color:#fff;box-shadow:inset 2px 0 0 #ff4d4f}
 .nv .n{margin-left:auto;font-size:11.5px;color:#8a93a6}
 .nv .ni{display:grid;place-items:center;width:20px;flex:0 0 20px;opacity:.9}.nv.on .ni{color:#ff6b78}
-.sbtop{display:flex;align-items:center;gap:8px;padding:12px 12px 4px}.sbicon{width:30px;height:30px;border-radius:9px;background:#fff;padding:3px;display:none}
+.sbhead{display:flex;align-items:center;gap:9px;padding:10px 10px 8px 12px;border-bottom:1px solid rgba(255,255,255,.06)}
+.sbicon{width:28px;height:28px;border-radius:8px;background:#fff;padding:3px;flex:0 0 28px;box-sizing:border-box}
+.sbname{font-weight:700;font-size:13.5px;color:#e8ecf4;white-space:nowrap}
 .sbtog{margin-left:auto;width:28px;height:28px;border-radius:8px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);color:#a9b1c3;display:grid;place-items:center;cursor:pointer;transition:transform .2s,background .15s}
 .sbtog:hover{background:rgba(255,77,94,.14);color:#fff}
+.shell.has-sess{grid-template-columns:230px 300px 1fr}
+.sessbar{background:#0a101b}.sesshead{padding:14px 12px 8px;font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:#8a93a6;font-weight:600}
 .hint{margin-top:4px;font-size:11.5px;color:#8a93a6;line-height:1.35;max-width:320px}
 .shell{transition:grid-template-columns .2s ease}
 .shell.collapsed{grid-template-columns:68px 1fr!important}
-.shell.collapsed .sidebar{background:linear-gradient(180deg,rgba(232,45,63,.16),rgba(232,45,63,.04) 45%,#0c121e)}
-.shell.collapsed .sbtop{flex-direction:column;padding:12px 0 6px}.shell.collapsed .sbicon{display:block}.shell.collapsed .sbtog{margin:0;transform:rotate(180deg)}
+.shell.collapsed.has-sess{grid-template-columns:68px 300px 1fr!important}
+.shell.collapsed .navbar{background:linear-gradient(180deg,rgba(232,45,63,.16),rgba(232,45,63,.04) 45%,#0c121e)}
+.shell.collapsed .sbhead{justify-content:center;gap:4px;padding:10px 0 8px}.shell.collapsed .sbname{display:none}.shell.collapsed .sbtog{margin:0;width:22px;height:28px;transform:rotate(180deg)}
 .shell.collapsed .nav{align-items:center;padding:8px 0;border-bottom:0;gap:6px}
 .shell.collapsed .nv{width:44px;height:44px;padding:0;justify-content:center;border-radius:12px}
 .shell.collapsed .nv .nl,.shell.collapsed .nv .n{display:none}
 .shell.collapsed .nv.on{background:rgba(232,45,63,.22);box-shadow:0 0 0 1px rgba(232,45,63,.35),0 6px 16px -8px #e82d3f}
-.shell.collapsed .searchbox,.shell.collapsed .list{display:none!important}
 .page{padding:24px 28px;max-width:1150px}.page.narrow{max-width:560px}.page h2{margin:0 0 14px;font-size:20px}.ph{display:flex;align-items:center;gap:10px;margin-bottom:12px}.ph h2{margin:0}.sp{flex:1}
 .tbl{width:100%;border-collapse:collapse;font-size:13px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.06);border-radius:12px;overflow:hidden}
 .tbl th{text-align:left;font-weight:600;color:#8a93a6;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.06)}

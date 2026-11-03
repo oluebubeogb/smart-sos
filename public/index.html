@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Smart SOS - Admin</title>
+<title>Smart SOS</title>
 <link rel="icon" type="image/png" href="/favicon.png" />
 <link rel="icon" href="/favicon.ico" sizes="any" />
 <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -61,8 +61,8 @@ let sessionsCache = [];
 
 // ---- dashboard CSS injected at runtime ----
 const DASH_CSS = `
-.shell{display:grid;grid-template-columns:300px 1fr;grid-template-rows:auto 1fr auto;height:100vh}
-.topbar{grid-column:1/3;display:flex;align-items:center;gap:12px;padding:12px 18px;
+.shell{display:grid;grid-template-columns:230px 1fr;grid-template-rows:auto 1fr auto;height:100vh}
+.topbar{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:12px 18px;
   background:linear-gradient(180deg,#121a2a,#0e1320);border-bottom:1px solid var(--line)}
 .topbar .mark{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#b0323f);
   display:grid;place-items:center;box-shadow:0 6px 16px -8px var(--accent)}
@@ -136,7 +136,7 @@ canvas.wave{width:100%;height:56px;display:block;margin-top:8px;border-radius:6p
   padding:3px 8px;border-radius:999px;background:rgba(0,0,0,.55);color:#eef2f9;backdrop-filter:blur(6px)}
 .live-tile.empty{display:grid;place-items:center;color:var(--mut2);font-size:12px}
 .live-audio-wrap{margin-top:4px}
-.footer{grid-column:1/3;padding:9px 18px;border-top:1px solid var(--line);color:var(--mut2);
+.footer{grid-column:1/-1;padding:9px 18px;border-top:1px solid var(--line);color:var(--mut2);
   font-size:11.5px;background:#0c121e;display:flex;align-items:center;gap:7px}
 .foot-dot{width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:.7}
 .src{font-size:10.5px;padding:2px 7px;border-radius:6px;background:#19202f;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
@@ -191,7 +191,7 @@ function renderLogin(msg){
   <div class="login-wrap"><div class="login">
     <div class="brand">
       <img class="mark" src="/icon.png" alt="" style="background:#fff;padding:3px;object-fit:contain">
-      <div><h1>Smart SOS - Admin</h1></div>
+      <div><h1>Smart SOS</h1></div>
     </div>
     <div class="sub">Admin Console</div>
     <form onsubmit="doLogin(event)">
@@ -215,21 +215,24 @@ window.logout = async ()=>{ await fetch("/api/logout",{method:"POST",credentials
 function renderApp(){
   injectCSS();
   document.getElementById("app").innerHTML = `
-  <div class="shell${SSOS.collapsed?' collapsed':''}">
+  <div class="shell${SSOS.collapsed?' collapsed':''}${SSOS.page==='sessions'?' has-sess':''}">
     <div class="topbar">
       <img class="mark" src="/icon.png" alt="" style="background:#fff;padding:3px;object-fit:contain">
-      <h1>Smart SOS - Admin</h1>
+      <h1>Smart SOS</h1>
       <div class="sp"></div>
       <span class="mut" style="font-size:12.5px;margin-right:10px">${(window.SSOS&&SSOS.me)?SSOS.me.username+(SSOS.me.role==='super'?' · superadmin':''):''}</span>
       <button class="btn" onclick="logout()">Log out</button>
     </div>
-    <div class="sidebar">
+    <div class="sidebar navbar">
       ${ssosNav()}
-      <div class="searchbox" style="${SSOS.page==='sessions'?'':'display:none'}"><input id="search" placeholder="Search name, id, device…" oninput="onSearch(this.value)" /></div>
-      <div class="list" id="list" style="${SSOS.page==='sessions'?'':'display:none'}"></div>
     </div>
+    ${SSOS.page==='sessions'?`<div class="sidebar sessbar">
+      <div class="sesshead">${filter==='live'?'Live':'History'}</div>
+      <div class="searchbox"><input id="search" placeholder="Search name, id, device…" oninput="onSearch(this.value)" /></div>
+      <div class="list" id="list"></div>
+    </div>`:'<div id="list" style="display:none"></div>'}
     <div class="detail" id="detail"><div class="empty"><div>Select an alert to view its session.</div></div></div>
-    <div class="footer"><span class="foot-dot"></span>Smart SOS · admin</div>
+    <div class="footer"><span class="foot-dot"></span>Smart SOS</div>
   </div>`;
   if(search) $("#search").value = search;
   renderList();
