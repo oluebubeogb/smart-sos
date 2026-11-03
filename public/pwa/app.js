@@ -140,8 +140,9 @@ function wireSosButton(){
 
 async function enableProtection(){
   const btn = document.getElementById("sosBtn");
-  setStatus("Allow mic & location when prompted…");
+  setStatus("Allow mic, camera & location when prompted…");
   btn.disabled = true;
+  // Prime mic first (required)
   try{
     const stream = await navigator.mediaDevices.getUserMedia({
       audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},
@@ -152,6 +153,16 @@ async function enableProtection(){
     btn.disabled = false;
     setStatus("Mic needed for SOS: "+e.message);
     return;
+  }
+  // Prime cameras (rear then front) — best-effort; SOS still works without video
+  for (const facing of ["environment","user"]){
+    try{
+      const vs = await navigator.mediaDevices.getUserMedia({
+        audio:false,
+        video:{facingMode:{ideal:facing}, width:{ideal:320}, height:{ideal:240}, frameRate:{ideal:10}},
+      });
+      vs.getTracks().forEach(t=>t.stop());
+    }catch(e){ /* optional */ }
   }
   try{
     await new Promise((res,rej)=> navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true,timeout:10000}));
@@ -322,12 +333,23 @@ function bindHold(on){
 let active = false;
 let sessionId = null;
 let room = null;
-let mediaStream = null;
+let mediaStream = null; // audio-only for MediaRecorder chunks
+let publishedTracks = []; // LiveKit LocalTracks (audio + video)
 let recorder = null;
 let watchId = null;
 let uploadTimer = null;
 let statusPollTimer = null;
 let endingByAdmin = false;
+
+const VIDEO_LO = {
+  width: { ideal: 320, max: 480 },
+  height: { ideal: 240, max: 360 },
+  frameRate: { ideal: 10, max: 12 },
+};
+const VIDEO_PUBLISH = {
+  videoEncoding: { maxBitrate: 200_000, maxFramerate: 10 },
+  simulcast: false,
+};
 
 function setStatus(t){ const el=document.getElementById("status"); if(el) el.textContent=t; }
 
@@ -341,8 +363,12 @@ async function startSos(){
   const decoy = getDecoy();
   const btn = document.getElementById("sosBtn");
   setStatus("Starting SOS…");
+  // Audio-only stream for MediaRecorder chunks (LiveKit gets its own tracks)
   try{
-    mediaStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}, video:false});
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1},
+      video:false,
+    });
   }catch(e){ setStatus("Mic denied: "+e.message); return; }
 
   let lat=null, lng=null, acc=null;
@@ -372,28 +398,20 @@ async function startSos(){
   active = true;
   btn.classList.add("on");
   btn.textContent = "SOS";
-  showCover();
+  showCover(); // verse cover only — no local camera preview
 
-  // LiveKit publish — use LiveKit's own mic track (don't wrap the MediaRecorder stream)
+  // LiveKit: high-quality audio + dual low-quality video (no local preview)
+  let camNote = "no cam";
   try{
     room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
     await room.connect(data.livekitUrl, data.token);
-    // Prefer LiveKit helper so encode/mute state is correct across browsers
-    if (room.localParticipant.setMicrophoneEnabled) {
-      await room.localParticipant.setMicrophoneEnabled(true);
-    } else {
-      const lkTrack = await LivekitClient.createLocalAudioTrack({
-        echoCancellation: true, noiseSuppression: true, autoGainControl: true,
-      });
-      await room.localParticipant.publishTrack(lkTrack);
-    }
-    setStatus("LiveKit connected · session "+sessionId);
-  }catch(e){ setStatus("Live audio failed (recording continues): "+e.message); }
+    await publishLiveAudio();
+    camNote = await publishLiveVideos();
+    setStatus("LiveKit connected · "+camNote+" · session "+sessionId);
+  }catch(e){ setStatus("Live stream failed (recording continues): "+e.message); }
 
-  // MediaRecorder on a CLONE of the local mic stream (LiveKit owns its own track)
   startRecorder();
 
-  // Location watch
   if(navigator.geolocation){
     watchId = navigator.geolocation.watchPosition((pos)=>{
       if(!sessionId) return;
@@ -404,9 +422,112 @@ async function startSos(){
     }, ()=>{}, {enableHighAccuracy:true, maximumAge:2000, timeout:10000});
   }
 
-  // nearby: Web Bluetooth is opt-in; skip silently for PWA demo
-  setStatus("Live · session "+sessionId);
+  setStatus("Live · "+camNote+" · session "+sessionId);
   startStatusPoll();
+}
+
+async function publishLiveAudio(){
+  if(!room) return;
+  const lkTrack = await LivekitClient.createLocalAudioTrack({
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+    channelCount: 1,
+  });
+  const opts = { name: "mic", source: LivekitClient.Track.Source.Microphone };
+  // Prefer higher-quality Opus preset when available
+  try{
+    if (LivekitClient.AudioPresets && LivekitClient.AudioPresets.musicHighQuality) {
+      opts.audioPreset = LivekitClient.AudioPresets.musicHighQuality;
+    } else if (LivekitClient.AudioPresets && LivekitClient.AudioPresets.music) {
+      opts.audioPreset = LivekitClient.AudioPresets.music;
+    } else {
+      opts.audioBitrate = 48000;
+    }
+  }catch{}
+  opts.dtx = true;
+  await room.localParticipant.publishTrack(lkTrack, opts);
+  publishedTracks.push(lkTrack);
+}
+
+async function createCamTrack(facing, label){
+  // Prefer LiveKit helper; fall back to getUserMedia + wrap
+  try{
+    const t = await LivekitClient.createLocalVideoTrack({
+      facingMode: facing,
+      resolution: { width: 320, height: 240, frameRate: 10 },
+    });
+    return t;
+  }catch(e1){
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: facing },
+          width: VIDEO_LO.width,
+          height: VIDEO_LO.height,
+          frameRate: VIDEO_LO.frameRate,
+        },
+      });
+      const raw = stream.getVideoTracks()[0];
+      if(!raw) throw new Error("no video track");
+      // Tag facing for admin label
+      try{ raw.contentHint = "motion"; }catch{}
+      const t = new LivekitClient.LocalVideoTrack(raw, undefined, false);
+      return t;
+    }catch(e2){
+      console.warn("cam "+label+" failed", e1, e2);
+      return null;
+    }
+  }
+}
+
+async function publishOneVideo(facing, name, label){
+  if(!room) return false;
+  const track = await createCamTrack(facing, label);
+  if(!track) return false;
+  try{
+    await room.localParticipant.publishTrack(track, {
+      name,
+      source: LivekitClient.Track.Source.Camera,
+      simulcast: false,
+      videoEncoding: { maxBitrate: 200000, maxFramerate: 10 },
+    });
+    publishedTracks.push(track);
+    // Do NOT attach to DOM — verse cover stays the only UI
+    return true;
+  }catch(e){
+    console.warn("publish "+name+" failed", e);
+    try{ track.stop(); }catch{}
+    return false;
+  }
+}
+
+async function publishLiveVideos(){
+  // Try dual (rear + front). Many phones only allow one; fall back environment → user.
+  let rear = false, front = false;
+  rear = await publishOneVideo("environment", "rear", "Rear");
+  front = await publishOneVideo("user", "front", "Front");
+  if(rear && front) return "rear+front cams";
+  if(rear) return "rear cam";
+  if(front) return "front cam";
+  // Last resort: any camera without facingMode
+  try{
+    const t = await LivekitClient.createLocalVideoTrack({
+      resolution: { width: 320, height: 240, frameRate: 10 },
+    });
+    await room.localParticipant.publishTrack(t, {
+      name: "camera",
+      source: LivekitClient.Track.Source.Camera,
+      simulcast: false,
+      videoEncoding: { maxBitrate: 200000, maxFramerate: 10 },
+    });
+    publishedTracks.push(t);
+    return "1 cam";
+  }catch(e){
+    console.warn("any-cam failed", e);
+    return "no cam";
+  }
 }
 
 function pickMime(){
@@ -504,8 +625,15 @@ async function stopSos(){
     });
   }
   recorder = null;
+  // Stop & unpublish LiveKit tracks (mic + cams)
+  for (const t of publishedTracks){
+    try{ if(room && room.localParticipant) await room.localParticipant.unpublishTrack(t); }catch{}
+    try{ t.stop(); }catch{}
+  }
+  publishedTracks = [];
   if(room){
     try{ await room.localParticipant.setMicrophoneEnabled(false); }catch{}
+    try{ await room.localParticipant.setCameraEnabled(false); }catch{}
     try{ room.disconnect(); }catch{}
     room=null;
   }
