@@ -15,14 +15,20 @@ export async function initDb(url) {
       "Coolify: add a PostgreSQL resource and copy its internal URL into DATABASE_URL.\n");
     process.exit(1);
   }
-  const ssl = /sslmode=require/.test(url) || process.env.PGSSL === "1" ? { rejectUnauthorized: false } : undefined;
+  const ssl = /sslmode=(require|verify|prefer)/.test(url) || process.env.PGSSL === "1" ? { rejectUnauthorized: false } : undefined;
   pool = new pg.Pool({ connectionString: url, max: 10, ssl });
   pool.on("error", (e) => console.error("pg pool error", e.message));
   for (let i = 0; ; i++) {
     try { await pool.query("SELECT 1"); break; }
     catch (e) {
-      if (i >= 30) throw e;
-      console.log("waiting for postgres…", e.message);
+      const host = (() => { try { return new URL(url).host; } catch { return "?"; } })();
+      if (i >= 30) {
+        console.error(`\n[Smart SOS] refusing to start: cannot connect to Postgres at ${host}: ${e.message}\n` +
+          "Check DATABASE_URL uses Coolify's INTERNAL Postgres URL, the app and Postgres share a network\n" +
+          "(enable 'Connect to Predefined Network' on this app), and try ?sslmode=require or PGSSL=1 if SSL is enforced.\n");
+        process.exit(1);
+      }
+      console.log(`[Smart SOS] waiting for postgres at ${host} (${i + 1}/30)…`, e.message);
       await new Promise((r) => setTimeout(r, 2000));
     }
   }

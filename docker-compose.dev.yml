@@ -1,0 +1,20 @@
+# LOCAL ONLY — adds a Postgres container. Do not use on Coolify.
+services:
+  sos-guard-server:
+    environment:
+      DATABASE_URL: postgres://smartsos:smartsos@postgres:5432/smartsos
+    ports:
+      - "7474:7474"
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: smartsos, POSTGRES_PASSWORD: smartsos, POSTGRES_DB: smartsos }
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smartsos -d smartsos"]
+      interval: 5s
+      retries: 20
+volumes:
+  pgdata:

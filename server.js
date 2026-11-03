@@ -20,7 +20,7 @@ import * as db from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 7474;
 const ADMIN_USER = process.env.ADMIN_USER || "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin";
 const SESSION_SECRET = process.env.SESSION_SECRET || "demo-secret";
