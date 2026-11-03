@@ -1,5 +1,5 @@
 // Decoy PWA service worker — shell cache only
-const CACHE = "ssos-pwa-v2";
+const CACHE = "ssos-pwa-v3";
 const SHELL = ["./", "./index.html", "./app.js"];
 self.addEventListener("install", (e)=>{
   e.waitUntil(caches.open(CACHE).then((c)=>c.addAll(SHELL)).then(()=>self.skipWaiting()));

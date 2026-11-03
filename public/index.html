@@ -153,18 +153,22 @@ canvas.wave{width:100%;height:56px;display:block;margin-top:8px;border-radius:6p
 .chunk-row .mini-play{display:none;margin-left:auto;background:#19202f;border:1px solid var(--line);color:var(--txt);
   border-radius:7px;padding:4px 9px;font-size:11px;cursor:pointer}
 .chunk-row .expand-btn{display:none;background:transparent;border:0;color:var(--mut2);font-size:11px;cursor:pointer;padding:2px 4px}
-#audioList.compact .chunk-row{padding:6px 10px}
-#audioList.compact .chunk-row .chunk-body{display:none}
-#audioList.compact .chunk-row.expanded .chunk-body{display:block;margin-top:8px}
-#audioList.compact .chunk-row .mini-play,
-#audioList.compact .chunk-row .expand-btn{display:inline-flex}
-#audioList.compact .chunk-head{gap:8px}
-#audioList.compact .chunk-head .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#audioList.compact .chunk-row,#videoList.compact .chunk-row{padding:6px 10px}
+#audioList.compact .chunk-row .chunk-body,#videoList.compact .chunk-row .chunk-body{display:none}
+#audioList.compact .chunk-row.expanded .chunk-body,#videoList.compact .chunk-row.expanded .chunk-body{display:block;margin-top:8px}
+#audioList.compact .chunk-row .mini-play,#videoList.compact .chunk-row .mini-play,
+#audioList.compact .chunk-row .expand-btn,#videoList.compact .chunk-row .expand-btn{display:inline-flex}
+#audioList.compact .chunk-head,#videoList.compact .chunk-head{gap:8px}
+#audioList.compact .chunk-head .nm,#videoList.compact .chunk-head .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .video-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @media (max-width:900px){.video-grid{grid-template-columns:1fr}}
 .video-chunk{border:1px solid #1f2633;border-radius:10px;background:#0a0e14;padding:8px}
 .video-chunk .vh{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--mut);margin-bottom:6px}
 .video-chunk video{width:100%;border-radius:6px;background:#000;max-height:220px}
+#videoList .chunk-row video{width:100%;max-height:240px;border-radius:6px;background:#000}
+#videoList:not(.compact) #vidRows{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:900px){#videoList:not(.compact) #vidRows{grid-template-columns:1fr}}
+#videoList:not(.compact) .mini-play,#videoList:not(.compact) .expand-btn{display:none}
 `;
 
 function injectCSS(){
@@ -343,12 +347,13 @@ function setupMap(s){
   if(s.locations&&s.locations.length){ track = L.polyline(s.locations.map(p=>[p.lat,p.lng]),{color:'#ff4d5e',weight:3}).addTo(map); }
 }
 
-function audioCompactOn(){
-  try{ return localStorage.getItem("nss_audio_compact") === "1"; }catch{ return false; }
+function compactOn(kind){
+  try{ return localStorage.getItem("nss_"+(kind||"audio")+"_compact") === "1"; }catch{ return false; }
 }
-function setAudioCompact(on){
-  try{ localStorage.setItem("nss_audio_compact", on ? "1" : "0"); }catch{}
+function setCompact(kind, on){
+  try{ localStorage.setItem("nss_"+(kind||"audio")+"_compact", on ? "1" : "0"); }catch{}
 }
+function audioCompactOn(){ return compactOn("audio"); }
 
 async function loadAudio(id){
   try{
@@ -362,9 +367,9 @@ async function loadAudio(id){
     let html = `<div class="exp-bar">
       <p class="playlist-hint">Chunks · playing continuously (auto-advances)</p>
       <div class="exp-tools">
-        <label class="mark-all"><input type="checkbox" id="markAll"> Mark all</label>
-        <button type="button" id="compactBtn" class="tool-btn${compact?" on":""}">${compact?"Full cards":"Condensed"}</button>
-        <button id="exportBtn" class="exp-btn" disabled>Export marked (0)</button>
+        <label class="mark-all"><input type="checkbox" class="mark-all-cb"> Mark all audio</label>
+        <button type="button" class="tool-btn compact-btn${compact?" on":""}">${compact?"Full cards":"Condensed"}</button>
+        <button class="exp-btn export-btn" disabled>Export marked (0)</button>
       </div>
     </div>`;
     html += `<div id="chunkPlaylist">` + chunks.map((f,i)=>`
@@ -383,9 +388,9 @@ async function loadAudio(id){
       </div>`).join("") + `</div>`;
     box.innerHTML = html;
     wireChunkPlaylist(box);
-    wireExport(box, id);
+    wireExport(box, id, "audio");
     wireMarkAll(box);
-    wireCompact(box);
+    wireCompact(box, "audio");
     wireCondensedControls(box);
     chunks.forEach((f,i)=>drawWave(box, i, f.url));
   }catch(e){ const box=$("#audioList"); if(box) box.innerHTML='<span class="mut">Could not load audio.</span>'; }
@@ -397,44 +402,75 @@ async function loadVideo(id){
     const box = $("#videoList"); if(!box) return;
     const list = (files||[]).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
     if(!list.length){ box.innerHTML = '<span class="mut">No video chunks yet.</span>'; return; }
+    // keep marks/expanded state across live reloads
+    const keepMarks = new Set([...box.querySelectorAll("input.mk:checked")].map(c=>c.dataset.url));
+    const keepOpen = new Set([...box.querySelectorAll(".chunk-row.expanded")].map(r=>r.dataset.url));
     const camOf = n => ((n.match(/^video-([a-z0-9_-]+)-\d+/i)||[])[1]||"cam");
-    box.innerHTML = `<p class="playlist-hint" style="margin-top:0">Low-res video · separate streams (not muxed with audio)</p>
-      <div class="video-grid">` + list.map(f=>{
-        const cam = camOf(f.name);
-        return `<div class="video-chunk" data-cam="${cam}">
-          <div class="vh"><span>${cam} · ${f.name}</span></div>
-          <video controls preload="metadata" src="${f.url}" playsinline></video>
-        </div>`;
-      }).join("") + `</div>`;
+    const seqOf = n => parseInt((n.match(/-(\d+)\.\w+$/)||[])[1]||"0",10);
+    const compact = compactOn("video");
+    box.classList.toggle("compact", compact);
+    let html = `<div class="exp-bar">
+      <p class="playlist-hint">Video chunks · ~60s each, with sound (audio-only stream is separate above)</p>
+      <div class="exp-tools">
+        <label class="mark-all"><input type="checkbox" class="mark-all-cb"> Mark all video</label>
+        <button type="button" class="tool-btn compact-btn${compact?" on":""}">${compact?"Full cards":"Condensed"}</button>
+        <button class="exp-btn export-btn" disabled>Download marked (0)</button>
+      </div>
+    </div><div id="vidRows">`;
+    html += list.map((f,i)=>{
+      const cam = camOf(f.name);
+      return `<div class="audio-row chunk-row video-chunk${keepOpen.has(f.url)?" expanded":""}" data-kind="video" data-cam="${cam}" data-url="${f.url}" data-idx="${i}">
+        <div class="chunk-head">
+          <label class="mark"><input type="checkbox" class="mk" data-url="${f.url}" data-name="${f.name}" data-n="${i}"${keepMarks.has(f.url)?" checked":""}> Mark</label>
+          <span class="nm">${cam} · ${String(seqOf(f.name)+1).padStart(2,"0")} · ${f.name}</span>
+          <button type="button" class="mini-play" data-idx="${i}" title="Play">▶</button>
+          <button type="button" class="expand-btn" data-idx="${i}" title="Expand">${keepOpen.has(f.url)?"▴":"▾"}</button>
+        </div>
+        <div class="chunk-body">
+          <video controls preload="metadata" data-chunk-idx="${i}" src="${f.url}" playsinline></video>
+        </div>
+      </div>`;
+    }).join("") + `</div>`;
+    box.innerHTML = html;
+    wireExport(box, id, "video");
+    wireMarkAll(box);
+    wireCompact(box, "video");
+    wireCondensedControls(box);
+    box.querySelectorAll("input.mk:checked").forEach(c=>c.dispatchEvent(new Event("change")));
   }catch(e){ const box=$("#videoList"); if(box) box.innerHTML='<span class="mut">Could not load video.</span>'; }
 }
 
 function wireMarkAll(box){
-  const all = box.querySelector("#markAll"); if(!all) return;
+  const all = box.querySelector(".mark-all-cb"); if(!all) return;
   const sync = ()=>{
     const mks = [...box.querySelectorAll("input.mk")];
     all.checked = mks.length > 0 && mks.every(c=>c.checked);
     all.indeterminate = mks.some(c=>c.checked) && !all.checked;
   };
+  // BUGFIX: each per-row change event re-ran sync(), which flipped all.checked back to
+  // false after the first row -> only one row ever got marked. Capture the target first.
   all.addEventListener("change", ()=>{
+    const want = all.checked;
     box.querySelectorAll("input.mk").forEach(c=>{
-      c.checked = all.checked;
+      if(c.checked === want) return;
+      c.checked = want;
       c.dispatchEvent(new Event("change", {bubbles:true}));
     });
+    sync();
   });
   box.querySelectorAll("input.mk").forEach(c=>c.addEventListener("change", sync));
   sync();
 }
 
-function wireCompact(box){
-  const btn = box.querySelector("#compactBtn"); if(!btn) return;
+function wireCompact(box, kind){
+  const btn = box.querySelector(".compact-btn"); if(!btn) return;
   btn.addEventListener("click", ()=>{
     const on = !box.classList.contains("compact");
     box.classList.toggle("compact", on);
-    setAudioCompact(on);
+    setCompact(kind, on);
     btn.classList.toggle("on", on);
     btn.textContent = on ? "Full cards" : "Condensed";
-    if(!on) box.querySelectorAll(".chunk-row.expanded").forEach(r=>r.classList.remove("expanded"));
+    if(!on) box.querySelectorAll(".chunk-row.expanded").forEach(r=>{ r.classList.remove("expanded"); const b=r.querySelector(".expand-btn"); if(b) b.textContent="▾"; });
   });
 }
 
@@ -443,8 +479,10 @@ function wireCondensedControls(box){
     btn.addEventListener("click", (ev)=>{
       ev.stopPropagation();
       const i = btn.dataset.idx;
-      const au = box.querySelector(`audio[data-chunk-idx="${i}"]`);
+      const au = box.querySelector(`[data-chunk-idx="${i}"]`);
       if(!au) return;
+      const row = btn.closest(".chunk-row");
+      if(au.tagName==="VIDEO" && row && !row.classList.contains("expanded")){ row.classList.add("expanded"); const eb=row.querySelector(".expand-btn"); if(eb) eb.textContent="▴"; }
       if(au.paused){
         const p = au.play(); if(p&&p.catch)p.catch(()=>{});
         btn.textContent = "❚❚";
@@ -463,7 +501,7 @@ function wireCondensedControls(box){
       btn.textContent = open ? "▴" : "▾";
     });
   });
-  box.querySelectorAll("audio[data-chunk-idx]").forEach(au=>{
+  box.querySelectorAll("audio[data-chunk-idx],video[data-chunk-idx]").forEach(au=>{
     au.addEventListener("play", ()=>{
       const i = au.getAttribute("data-chunk-idx");
       const b = box.querySelector(`.mini-play[data-idx="${i}"]`);
@@ -519,17 +557,28 @@ async function drawWave(box, i, url){
   cv.addEventListener("pointerup", ()=>{ drag=false; });
 }
 
-function wireExport(box, id){
-  const btn = box.querySelector("#exportBtn"); if(!btn) return;
+function wireExport(box, id, kind){
+  const btn = box.querySelector(".export-btn"); if(!btn) return;
+  const label = kind === "video" ? "Download marked" : "Export marked";
   const marked = ()=>[...box.querySelectorAll("input.mk:checked")].sort((a,b)=>a.dataset.n-b.dataset.n);
   box.querySelectorAll("input.mk").forEach(c=>c.addEventListener("change", ()=>{
-    const n = marked().length; btn.textContent = `Export marked (${n})`; btn.disabled = !n;
+    const n = marked().length; btn.textContent = `${label} (${n})`; btn.disabled = !n;
     c.closest(".chunk-row").classList.toggle("marked", c.checked);
   }));
   btn.addEventListener("click", async ()=>{
     const list = marked(); if(!list.length) return;
     btn.disabled = true; const old = btn.textContent; btn.textContent = "Exporting…";
     try{
+      if(kind === "video"){
+        // video segments are separate files (each playable with sound) — download each marked one
+        for(const c of list){
+          const r = await fetch(c.dataset.url,{credentials:"same-origin"}); if(!r.ok) throw new Error("fetch "+r.status);
+          const b = await r.blob(); const a = document.createElement("a"); a.href = URL.createObjectURL(b);
+          a.download = `sos-${id}-${c.dataset.name||"video"}`; document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(()=>URL.revokeObjectURL(a.href), 60000); await new Promise(r=>setTimeout(r, 400));
+        }
+        btn.textContent = old; btn.disabled = false; return;
+      }
       const parts = [];
       for(const c of list){ const r = await fetch(c.dataset.url,{credentials:"same-origin"}); if(!r.ok) throw new Error("fetch "+r.status); parts.push(await r.arrayBuffer()); }
       const blob = new Blob(parts, {type:"audio/webm"});
