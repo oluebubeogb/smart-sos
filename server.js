@@ -14,7 +14,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
-import { AccessToken } from "livekit-server-sdk";
+import { AccessToken, RoomServiceClient, WebhookReceiver } from "livekit-server-sdk";
 import multer from "multer";
 import * as db from "./db.js";
 
@@ -27,6 +27,14 @@ const SESSION_SECRET = process.env.SESSION_SECRET || "demo-secret";
 const LIVEKIT_URL = process.env.LIVEKIT_URL || "wss://1v.collab.name.ng";
 const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || "devkey";
 const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || "secret";
+// D: short-lived LiveKit JWTs; clients renew via /livekit/publisher|viewer while session is active.
+const LIVEKIT_TOKEN_TTL = Math.max(60, Math.min(7200, parseInt(process.env.LIVEKIT_TOKEN_TTL_SECONDS || "900", 10) || 900));
+const LIVEKIT_HTTP_URL = (process.env.LIVEKIT_HTTP_URL || LIVEKIT_URL).replace(/^ws/, "http");
+const roomSvc = new RoomServiceClient(LIVEKIT_HTTP_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
+const lkWebhook = new WebhookReceiver(LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
+// B: room name carries a random per-session epoch; rotated on end so old JWTs point at a dead name.
+const newRoomName = (id) => "sos-" + id + "-" + crypto.randomBytes(6).toString("hex");
+const retiredRooms = new Set();
 
 const DATA_DIR = process.env.DATA_DIR || "/data";
 const AUDIO_DIR = path.join(DATA_DIR, "audio");
@@ -170,6 +178,20 @@ function canSeeKey(a, k) { return isSuper(a) || (k.owner_admin_id && k.owner_adm
 
 const app = express();
 app.set("trust proxy", true);
+// LiveKit server webhook (defense in depth): any join/room start for a room that isn't the
+// current room of an ACTIVE session is torn down immediately.
+app.post("/api/livekit/webhook", express.raw({ type: "*/*", limit: "1mb" }), async (req, res) => {
+  let ev;
+  try { ev = await lkWebhook.receive(req.body.toString("utf8"), req.get("Authorization")); }
+  catch { return res.status(401).json({ error: "bad_signature" }); }
+  res.json({ ok: true });
+  const room = ev?.room?.name;
+  if (!room || !/^sos-/.test(room)) return;
+  if (["room_started", "participant_joined"].includes(ev.event) && !isLiveRoom(room)) {
+    console.warn("livekit: tearing down unauthorized room", room, ev.event);
+    lkDeleteRoom(room);
+  }
+});
 app.use(express.json({ limit: "256kb" }));
 app.use(cookieParser());
 // Express 4: forward async handler rejections to the error middleware
@@ -376,16 +398,17 @@ app.post("/api/sos", async (req, res) => {
   const s = {
     id, deviceId: deviceId || "unknown-device", decoyName: decoyName || "App",
     source: typeof source === "string" && source ? source : "unknown",
-    room: "sos-" + id, createdAt: Date.now(), endedAt: null, active: true, status: "SOS triggered",
+    room: newRoomName(id), createdAt: Date.now(), endedAt: null, active: true, status: "SOS triggered",
     locations: [], nearby: [], events: [], audioFiles: [], videoFiles: [], keyId: null, ownerAdminId: null,
   };
   if (typeof lat === "number" && typeof lng === "number") s.locations.push({ lat, lng, acc: acc ?? null, ts: Date.now() });
   sessions.set(id, s);
   await persist(s);
   if (s.locations.length) bg(db.addLocations(id, s.locations));
-  const token = await mintToken(s.room, "device-" + s.deviceId, { canPublish: true, canSubscribe: false });
+  await lkCreateRoom(s.room);
+  const lk = await mintFor(s, "device-" + s.deviceId, { canPublish: true, canSubscribe: false });
   broadcast({ type: "alert", session: publicSession(s) });
-  res.json({ sessionId: id, room: s.room, livekitUrl: LIVEKIT_URL, token });
+  res.json({ sessionId: id, room: s.room, livekitUrl: LIVEKIT_URL, token: lk.token, expiresAt: lk.expiresAt, ttlSeconds: lk.ttlSeconds });
 });
 
 function addLocationPoints(s, pts) {
@@ -631,7 +654,20 @@ app.post(P + "/sessions", requirePartner, async (req, res) => {
   const ext = b.external_ref ? String(b.external_ref).slice(0, 128) : null;
   if (ext) {
     for (const s of sessions.values())
-      if (s.keyId === req.key.id && s.externalRef === ext && s.active) return res.json({ ...partnerView(s), duplicate: true });
+      if (s.keyId === req.key.id && s.externalRef === ext) {
+        if (!s.active && !b.force_new) return res.status(409).json({ error: "session_ended", sessionId: s.id, external_ref: ext, endedAt: s.endedAt || null, message: "This external_ref belongs to an ended SOS. Use a new external_ref (or force_new:true) to open a new SOS." });
+        if (s.active) {
+          const out = { ...partnerView(s), duplicate: true };
+          if (b.want_livekit) out.livekit = await mintFor(s, partnerIdentity(req, s, "publisher", b.device_id), { canPublish: true, canSubscribe: false });
+          return res.json(out);
+        }
+      }
+    if (!b.force_new) {
+      try {
+        const r = await db.q("SELECT id, ended_at FROM sessions WHERE key_id=$1 AND external_ref=$2 AND active=false ORDER BY started_at DESC LIMIT 1", [req.key.id, ext]);
+        if (r.rowCount) return res.status(409).json({ error: "session_ended", sessionId: r.rows[0].id, external_ref: ext, endedAt: Number(r.rows[0].ended_at) || null, message: "This external_ref belongs to an ended SOS. Use a new external_ref (or force_new:true) to open a new SOS." });
+      } catch (e) { console.error("external_ref check", e.message); return res.status(503).json({ error: "db_unavailable" }); }
+    }
   }
   const id = crypto.randomUUID().slice(0, 8);
   const appId = String(b.app_id || req.partner).toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40) || req.partner;
@@ -642,7 +678,7 @@ app.post(P + "/sessions", requirePartner, async (req, res) => {
     user: b.user && typeof b.user === "object" ? b.user : null,
     metadata: b.metadata && typeof b.metadata === "object" ? b.metadata : null,
     callbackUrl: typeof b.callback_url === "string" && /^https:\/\//.test(b.callback_url) ? b.callback_url : null,
-    room: "sos-" + id, createdAt: Date.now(), endedAt: null, active: true,
+    room: newRoomName(id), createdAt: Date.now(), endedAt: null, active: true,
     status: "SOS triggered (" + appId + ")", locations: [], nearby: [], audioFiles: [], videoFiles: [], events: [],
   };
   if (JSON.stringify(s.user || {}).length + JSON.stringify(s.metadata || {}).length > 16000)
@@ -656,7 +692,8 @@ app.post(P + "/sessions", requirePartner, async (req, res) => {
   if (s.nearby.length) bg(db.addNearby(id, s.nearby));
   broadcast({ type: "alert", session: publicSession(s) });
   const out = { ...partnerView(s) };
-  if (b.want_livekit) out.livekit = { url: LIVEKIT_URL, room: s.room, token: await mintToken(s.room, "partner-" + s.deviceId, { canPublish: true, canSubscribe: false }) };
+  await lkCreateRoom(s.room);
+  if (b.want_livekit) out.livekit = await mintFor(s, partnerIdentity(req, s, "publisher", b.device_id), { canPublish: true, canSubscribe: false });
   notifyPartner(s, "session.created");
   res.status(201).json(out);
 });
@@ -707,6 +744,21 @@ app.post(P + "/sessions/:id/video", requirePartner, partnerSession,
     try { res.json({ ok: true, file: await saveMedia(req.sos, "video", buf, mime, cam), cam }); }
     catch { res.status(500).json({ error: "write_failed" }); }
   });
+function partnerIdentity(req, s, role, raw) {
+  const tag = String(raw || (role === "publisher" ? s.deviceId : "") || "").replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 64) || "anon";
+  return (role === "publisher" ? "pub-" : "viewer-") + req.partner + "-" + tag;
+}
+app.post(P + "/sessions/:id/livekit/publisher", requirePartner, partnerSession, async (req, res) => {
+  const s = req.sos;
+  if (!s.active) return res.status(409).json({ error: "session_ended", sessionId: s.id });
+  res.json(await mintFor(s, partnerIdentity(req, s, "publisher", req.body?.device_id), { canPublish: true, canSubscribe: false }));
+});
+app.post(P + "/sessions/:id/livekit/viewer", requirePartner, partnerSession, async (req, res) => {
+  const s = req.sos;
+  if (!s.active) return res.status(409).json({ error: "session_ended", sessionId: s.id });
+  if (!req.body?.operator_id) return res.status(400).json({ error: "operator_id_required" });
+  res.json(await mintFor(s, partnerIdentity(req, s, "viewer", req.body.operator_id), { canPublish: false, canSubscribe: true }));
+});
 app.post(P + "/sessions/:id/end", requirePartner, partnerSession, (req, res) => {
   const s = req.sos;
   if (s.active) {
@@ -821,8 +873,9 @@ app.get("/api/session/:id", requireAdmin, adminSession, async (req, res) => {
   res.json(publicSession(req.sos, true));
 });
 app.get("/api/session/:id/listen-token", requireAdmin, adminSession, async (req, res) => {
-  const token = await mintToken(req.sos.room, "admin-" + req.admin.username + "-" + hex(2), { canPublish: false, canSubscribe: true });
-  res.json({ livekitUrl: LIVEKIT_URL, token, room: req.sos.room });
+  if (!req.sos.active) return res.status(409).json({ error: "session_ended" });
+  const lk = await mintFor(req.sos, "admin-" + req.admin.username + "-" + hex(2), { canPublish: false, canSubscribe: true });
+  res.json({ livekitUrl: LIVEKIT_URL, ...lk });
 });
 app.post("/api/session/:id/end", requireAdmin, adminSession, (req, res) => {
   const s = req.sos;
@@ -836,6 +889,10 @@ function endSessionObj(s, status, by) {
   s.status = status;
   s.endedAt = Date.now();
   s.endedBy = by || (/admin/.test(status) ? "admin" : "device");
+  // E + B: kick everyone out of the live room and retire its name (old JWTs now target a dead room).
+  const old = s.room;
+  if (old) { retiredRooms.add(old); lkDeleteRoom(old); }
+  s.room = newRoomName(s.id) + "-x";
   persist(s);
   notifyPartner(s, "session.ended", { endedBy: s.endedBy });
 }
@@ -859,11 +916,40 @@ function publicSession(s, full = false) {
   return base;
 }
 
-async function mintToken(room, identity, grants) {
-  const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, { identity, ttl: "2h" });
-  at.addGrant({ room, roomJoin: true, canPublish: grants.canPublish, canSubscribe: grants.canSubscribe, canPublishData: true });
+async function mintToken(room, identity, grants, ttl = LIVEKIT_TOKEN_TTL) {
+  const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, { identity, ttl });
+  at.addGrant({ room, roomJoin: true, roomCreate: false, canPublish: grants.canPublish, canSubscribe: grants.canSubscribe, canPublishData: !!grants.canPublish });
   return await at.toJwt();
 }
+async function mintFor(s, identity, grants) {
+  const expiresAt = Date.now() + LIVEKIT_TOKEN_TTL * 1000;
+  const token = await mintToken(s.room, identity, grants);
+  return { url: LIVEKIT_URL, room: s.room, token, expiresAt, ttlSeconds: LIVEKIT_TOKEN_TTL, identity };
+}
+function isLiveRoom(room) {
+  if (retiredRooms.has(room)) return false;
+  for (const s of sessions.values()) if (s.room === room) return !!s.active;
+  return false;
+}
+async function lkCreateRoom(room) {
+  try { await roomSvc.createRoom({ name: room, emptyTimeout: 600, departureTimeout: 120 }); }
+  catch (e) { console.warn("livekit createRoom failed", room, e.message); }
+}
+async function lkDeleteRoom(room, tries = 3) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const parts = await roomSvc.listParticipants(room).catch(() => []);
+      for (const p of parts) await roomSvc.removeParticipant(room, p.identity).catch(() => {});
+      await roomSvc.deleteRoom(room); return true;
+    } catch (e) {
+      if (/not.?found|404/i.test(e.message || "")) return true;
+      console.warn("livekit deleteRoom retry", room, e.message);
+      await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+    }
+  }
+  return false;
+}
+export const __test = { mintToken, isLiveRoom, newRoomName };
 
 app.get("/healthz", async (req, res) => {
   try { await db.q("SELECT 1"); res.json({ ok: true, db: true }); } catch { res.status(503).json({ ok: false, db: false }); }
