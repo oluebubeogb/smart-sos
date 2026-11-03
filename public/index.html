@@ -3,10 +3,11 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Now Smart SOS — Admin</title>
+<title>Smart SOS - Admin</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+<script src="/admin-extra.js"></script>
 <style>
   :root{
     --bg:#0b0e14; --bg2:#0e1320; --panel:#121a2a; --panel2:#0f1626;
@@ -124,7 +125,7 @@ canvas.wave{width:100%;height:56px;display:block;margin-top:8px;border-radius:6p
 
 .playlist-hint{font-size:12px;color:var(--mut2);margin:0 0 10px}
 .live-card{border-color:rgba(255,77,94,.35);box-shadow:0 0 0 1px rgba(255,77,94,.08) inset}
-.live-av{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+.live-av{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));max-width:900px;gap:10px;margin-bottom:10px}
 @media (max-width:900px){.live-av{grid-template-columns:1fr}}
 .live-tile{position:relative;background:#070b12;border:1px solid var(--line);border-radius:12px;overflow:hidden;min-height:160px;aspect-ratio:4/3}
 .live-tile video{width:100%;height:100%;object-fit:cover;display:block;background:#000}
@@ -183,7 +184,7 @@ function renderLogin(msg){
   <div class="login-wrap"><div class="login">
     <div class="brand">
       <div class="mark"><span></span></div>
-      <div><h1>Now Smart SOS</h1></div>
+      <div><h1>Smart SOS - Admin</h1></div>
     </div>
     <div class="sub">Admin Console</div>
     <form onsubmit="doLogin(event)">
@@ -210,27 +211,27 @@ function renderApp(){
   <div class="shell">
     <div class="topbar">
       <div class="mark"><span></span></div>
-      <h1>Now Smart SOS</h1>
+      <h1>Smart SOS - Admin</h1>
       <div class="sp"></div>
+      <span class="mut" style="font-size:12.5px;margin-right:10px">${(window.SSOS&&SSOS.me)?SSOS.me.username+(SSOS.me.role==='super'?' · superadmin':''):''}</span>
       <button class="btn" onclick="logout()">Log out</button>
     </div>
     <div class="sidebar">
-      <div class="segs">
-        <div class="seg ${filter==='live'?'active':''}" onclick="setFilter('live')">Live<span class="n" id="n-live"></span></div>
-        <div class="seg ${filter==='history'?'active':''}" onclick="setFilter('history')">History<span class="n" id="n-hist"></span></div>
-      </div>
-      <div class="searchbox"><input id="search" placeholder="Search name, id, device…" oninput="onSearch(this.value)" /></div>
-      <div class="list" id="list"></div>
+      ${ssosNav()}
+      <div class="searchbox" style="${SSOS.page==='sessions'?'':'display:none'}"><input id="search" placeholder="Search name, id, device…" oninput="onSearch(this.value)" /></div>
+      <div class="list" id="list" style="${SSOS.page==='sessions'?'':'display:none'}"></div>
     </div>
     <div class="detail" id="detail"><div class="empty"><div>Select an alert to view its session.</div></div></div>
-    <div class="footer"><span class="foot-dot"></span>Now Smart SOS · admin</div>
+    <div class="footer"><span class="foot-dot"></span>Smart SOS · admin</div>
   </div>`;
   if(search) $("#search").value = search;
   renderList();
+  if(SSOS.page!=='sessions'){ if(room){ try{ room.disconnect(); }catch{} room=null; } current=null; ssosRenderPage($("#detail")); }
 }
+window.__filter = ()=>filter;
+window.__rerender = ()=>renderApp();
 
-window.setFilter = (f)=>{ filter=f; $$(".seg").forEach(s=>s.classList.remove("active"));
-  renderApp(); };
+window.setFilter = (f)=>{ filter=f; SSOS.page='sessions'; renderApp(); };
 window.onSearch = (v)=>{ search=v.trim().toLowerCase(); renderList(); };
 
 function fmtDur(ms){
@@ -265,7 +266,7 @@ function renderList(){
         <span class="ico">◉ ${s.nearbyCount}</span>
         ${s.hasAudio?'<span class="ico">♪ audio</span>':''}
         ${s.hasVideo?'<span class="ico">▣ video</span>':''}
-        <span class="src">${s.source||'?'}</span>
+        ${s.org?`<span class="org-chip">${s.org}</span>`:`<span class="src">${s.source||'?'}</span>`}
       </div>
     </div>`).join("");
 }
@@ -286,8 +287,7 @@ window.openSession = async (id)=>{
     <div class="card live-card" id="liveCard" style="${s.active?'':'display:none'}">
       <h3>Live A/V <span class="pill live" style="margin-left:8px"><span class="pulse"></span>stream</span></h3>
       <div class="live-av" id="liveTiles">
-        <div class="live-tile empty" data-slot="rear">Waiting for rear…</div>
-        <div class="live-tile empty" data-slot="front">Waiting for front…</div>
+        <div class="live-tile empty" data-slot="__wait">Waiting for video…</div>
       </div>
       <div class="live-audio-wrap"><audio id="liveAudio" autoplay controls style="width:100%;display:none"></audio></div>
       <p class="mut" id="liveHint" style="font-size:12px;margin:8px 0 0">Tap <b>Watch live</b> above to subscribe. Video is low-res; audio stays as before.</p>
@@ -584,21 +584,41 @@ function labelForTrack(trk, pub){
   return "Camera";
 }
 
+// Phase 5: one card is always visible ("Waiting for video…"); extra cams appear only
+// once they actually render frames and hide again after ~5s without new frames.
+const tileState = new Map(); let tileTimer=null;
+function placeholderTile(){ return `<div class="live-tile empty" data-slot="__wait">Waiting for video…</div>`; }
+function liveTileMaint(){
+  const box=$("#liveTiles"); if(!box){ clearInterval(tileTimer); tileTimer=null; return; }
+  const now=Date.now();
+  for(const [slot,st] of tileState){
+    const v=st.video; if(!v.isConnected){ tileState.delete(slot); continue; }
+    const t=v.currentTime; const hasFrames=v.videoWidth>0 && v.readyState>=2;
+    if(hasFrames && t!==st.lastT){ st.lastT=t; st.lastFrame=now; }
+    st.live = hasFrames && (now-st.lastFrame)<5000;
+  }
+  const live=[...tileState.values()].filter(x=>x.live);
+  // show live cams; if none live, show the most recent one (frozen) or the placeholder
+  const ph=box.querySelector('[data-slot="__wait"]');
+  for(const st of tileState.values()) st.tile.style.display = st.live ? "" : "none";
+  if(!live.length){
+    if(ph) ph.style.display="";
+    else box.insertAdjacentHTML("afterbegin", placeholderTile());
+  } else if(ph) ph.style.display="none";
+}
 function ensureLiveTile(slot, label){
   const box = $("#liveTiles"); if(!box) return null;
-  let tile = box.querySelector(`.live-tile[data-slot="${slot}"]`);
-  if(!tile){
-    tile = box.querySelector(".live-tile.empty");
-    if(!tile){
-      const tiles = box.querySelectorAll(".live-tile");
-      if(tiles.length >= 2) tile = tiles[tiles.length-1];
-      else { tile = document.createElement("div"); tile.className="live-tile"; box.appendChild(tile); }
-    }
+  let st = tileState.get(slot);
+  if(!st || !st.tile.isConnected){
+    const tile=document.createElement("div"); tile.className="live-tile"; tile.dataset.slot=slot; tile.style.display="none";
+    box.appendChild(tile);
+    st={tile, video:null, lastT:-1, lastFrame:0, live:false}; tileState.set(slot, st);
   }
-  tile.classList.remove("empty");
-  tile.dataset.slot = slot;
-  tile.innerHTML = `<span class="cap">${label}</span><video autoplay playsinline muted></video>`;
-  return tile.querySelector("video");
+  st.tile.innerHTML = `<span class="cap">${label}</span><video autoplay playsinline muted></video>`;
+  st.video = st.tile.querySelector("video"); st.lastT=-1; st.lastFrame=0;
+  st.video.addEventListener("playing", liveTileMaint);
+  if(!tileTimer) tileTimer=setInterval(liveTileMaint, 1000);
+  return st.video;
 }
 
 function attachRemoteAudio(trk){
@@ -633,7 +653,8 @@ function attachPublication(pub){
 
 function clearLiveTiles(){
   const box = $("#liveTiles");
-  if(box) box.innerHTML = `<div class="live-tile empty" data-slot="rear">Waiting for rear…</div><div class="live-tile empty" data-slot="front">Waiting for front…</div>`;
+  tileState.clear();
+  if(box) box.innerHTML = placeholderTile();
   const a=$("#liveAudio"); if(a){ a.srcObject=null; a.style.display="none"; }
 }
 
@@ -649,6 +670,7 @@ window.startListen = async (id)=>{
     });
     room.on(LivekitClient.RoomEvent.TrackUnsubscribed,(trk)=>{
       try{ trk.detach(); }catch{}
+      liveTileMaint();
     });
     await room.connect(livekitUrl, token);
     // Attach tracks already published before we joined
@@ -685,7 +707,7 @@ function connectWS(){
   ws.onmessage = (ev)=>{
     const m = JSON.parse(ev.data);
     if(m.type==="hello"){ sessionsCache=m.sessions; renderList(); }
-    else if(m.type==="alert"){ upsert(m.session); renderList(); if(Notification.permission==="granted") new Notification("SOS — Now Smart SOS",{body:m.session.decoyName}); }
+    else if(m.type==="alert"){ upsert(m.session); renderList(); if(Notification.permission==="granted") new Notification("SOS — Smart SOS",{body:m.session.decoyName}); }
     else if(m.type==="location" && m.sessionId===current){ const el=$("#loc"); if(el) el.textContent=fmtLoc(m.point); if(marker){marker.setLatLng([m.point.lat,m.point.lng]); map.setView([m.point.lat,m.point.lng]); if(track) track.addLatLng([m.point.lat,m.point.lng]);} }
     else if(m.type==="nearby" && m.sessionId===current){ const t=$("#nearby tbody"); if(t) t.innerHTML=nearbyRows(m.devices); }
     else if(m.type==="audio"){ const s=sessionsCache.find(x=>x.id===m.sessionId); if(s){s.hasAudio=true;} if(m.sessionId===current) loadAudio(current); renderList(); }
@@ -697,7 +719,7 @@ function connectWS(){
 function upsert(s){ const i=sessionsCache.findIndex(x=>x.id===s.id); if(i>=0) sessionsCache[i]=s; else sessionsCache.push(s); }
 
 async function start(){
-  try{ await api("/api/me"); }catch{ return; }
+  try{ await ssosLoadMe(); }catch{ return renderLogin(); }
   renderApp(); if("Notification" in window) Notification.requestPermission();
   const data = await api("/api/sessions"); sessionsCache=data.sessions; renderList(); connectWS();
 }

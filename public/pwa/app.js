@@ -1,4 +1,4 @@
-// Decoy PWA for Now Smart SOS
+// Decoy PWA for Smart SOS
 const DECOYS = [
   {name:"Utilities", color:"#4c8dff", theme:"calc"},
   {name:"Notes", color:"#36b37e", theme:"notes"},

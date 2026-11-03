@@ -1,10 +1,10 @@
 FROM node:20-alpine
 WORKDIR /app
-COPY package.json ./
+COPY package.json package-lock.json* ./
 RUN npm install --omit=dev
 COPY . .
-RUN mkdir -p /data/history /data/audio
+RUN mkdir -p /data/history /data/audio /data/video
 VOLUME ["/data"]
 ENV DATA_DIR=/data
-EXPOSE 8080
+EXPOSE 7474
 CMD ["node", "server.js"]

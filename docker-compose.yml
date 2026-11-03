@@ -1,7 +1,12 @@
-# Coolify-friendly compose for the Now Smart SOS admin backend.
+# Coolify-friendly compose for the Smart SOS admin backend + Postgres.
 # Set PORT in Coolify env (default 7474 — host 8080 is often taken).
 # If Coolify proxies via Traefik and still conflicts on host binds, delete the
 # `ports:` block and set the resource's "Ports Exposes" to the same PORT value.
+#
+# Database: DATABASE_URL is REQUIRED. Either
+#   a) use the bundled `postgres` service below (default URL points at it), or
+#   b) create a PostgreSQL resource in Coolify, put its internal URL in DATABASE_URL,
+#      and delete the `postgres` service + `depends_on` block.
 services:
   sos-guard-server:
     build: .
@@ -9,15 +14,40 @@ services:
     environment:
       PORT: ${PORT:-7474}
       DATA_DIR: /data
+      DATABASE_URL: ${DATABASE_URL:-postgres://smartsos:${POSTGRES_PASSWORD:-smartsos}@postgres:5432/smartsos}
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       SESSION_SECRET: ${SESSION_SECRET:-change-me-demo-secret}
       LIVEKIT_URL: ${LIVEKIT_URL:-wss://1v.collab.name.ng}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-secret}
+      # Legacy (imported once into the DB on first boot, then managed in the admin):
+      SAFE_CORPS_API_KEY: ${SAFE_CORPS_API_KEY:-}
+      PARTNER_API_KEYS: ${PARTNER_API_KEYS:-}
+      PARTNER_WEBHOOK_URL: ${PARTNER_WEBHOOK_URL:-}
+      PARTNER_WEBHOOK_URLS: ${PARTNER_WEBHOOK_URLS:-}
+      MIGRATE_LEGACY: ${MIGRATE_LEGACY:-}
     ports:
       - "${PORT:-7474}:${PORT:-7474}"
     volumes:
-      - sos-data:/data
+      - sos-data:/data          # media files (audio/video) + legacy history JSON
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: smartsos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smartsos}
+      POSTGRES_DB: smartsos
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smartsos -d smartsos"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 volumes:
   sos-data:
+  pgdata:
