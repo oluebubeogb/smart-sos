@@ -29,7 +29,8 @@ const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || "secret";
 const DATA_DIR = process.env.DATA_DIR || "/data";
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const AUDIO_DIR = path.join(DATA_DIR, "audio");
-for (const d of [DATA_DIR, HISTORY_DIR, AUDIO_DIR]) {
+const VIDEO_DIR = path.join(DATA_DIR, "video");
+for (const d of [DATA_DIR, HISTORY_DIR, AUDIO_DIR, VIDEO_DIR]) {
   try { fs.mkdirSync(d, { recursive: true }); }
   catch (e) { console.error("mkdir failed for", d, e.message); }
 }
@@ -79,6 +80,7 @@ function loadFromDisk() {
       s.locations = Array.isArray(s.locations) ? s.locations : [];
       s.nearby = Array.isArray(s.nearby) ? s.nearby : [];
       s.audioFiles = Array.isArray(s.audioFiles) ? s.audioFiles : [];
+      s.videoFiles = Array.isArray(s.videoFiles) ? s.videoFiles : [];
       s.source = s.source || "unknown";
       sessions.set(s.id, s);
     } catch (e) { console.error("failed to load history", f, e.message); }
@@ -126,6 +128,7 @@ app.post("/api/sos", async (req, res) => {
     locations: [],
     nearby: [],
     audioFiles: [],
+    videoFiles: [],
   };
   if (typeof lat === "number" && typeof lng === "number") {
     s.locations.push({ lat, lng, acc: acc ?? null, ts: Date.now() });
@@ -184,7 +187,7 @@ app.get("/api/session/:id/status", (req, res) => {
 });
 
 // ---- audio upload (saved calls) ----
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 function sessionAudioDir(id) { return path.join(AUDIO_DIR, id); }
 function audioExtFor(mime) {
   if (!mime) return "webm";
@@ -282,6 +285,81 @@ app.get("/api/session/:id/audio/:file", requireAdmin, (req, res) => {
   }
 });
 
+// ---- video upload (separate low-res streams; not muxed with audio) ----
+function sessionVideoDir(id) { return path.join(VIDEO_DIR, id); }
+function videoCamSafe(cam) {
+  const c = String(cam || "cam").toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  return c || "cam";
+}
+function videoExtFor(mime) {
+  if (!mime) return "webm";
+  if (mime.includes("mp4")) return "mp4";
+  return "webm";
+}
+
+app.post("/api/session/:id/video",
+  express.raw({ type: ["video/*", "application/octet-stream"], limit: "40mb" }),
+  upload.single("video"),
+  async (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: "no session" });
+    let buf = null, mime = null;
+    if (req.file && req.file.buffer) { buf = req.file.buffer; mime = req.file.mimetype; }
+    else if (Buffer.isBuffer(req.body) && req.body.length) { buf = req.body; mime = req.headers["content-type"]; }
+    if (!buf || !buf.length) return res.status(400).json({ error: "no video body" });
+    const cam = videoCamSafe(req.query.cam || req.headers["x-sos-cam"] || "cam");
+    const ext = videoExtFor(mime);
+    const dir = sessionVideoDir(s.id);
+    try { await fsp.mkdir(dir, { recursive: true }); } catch {}
+    let existing = [];
+    const re = new RegExp("^video-" + cam.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "-\\d+\\.");
+    try { existing = (await fsp.readdir(dir)).filter((f) => re.test(f)); } catch {}
+    const name = "video-" + cam + "-" + String(existing.length).padStart(4, "0") + "." + ext;
+    try { await fsp.writeFile(path.join(dir, name), buf); }
+    catch (e) { return res.status(500).json({ error: "write failed", detail: e.message }); }
+    if (!Array.isArray(s.videoFiles)) s.videoFiles = [];
+    if (!s.videoFiles.includes(name)) s.videoFiles.push(name);
+    await persist(s);
+    broadcast({ type: "video", sessionId: s.id, file: name, cam, count: s.videoFiles.length });
+    res.json({ ok: true, file: name, cam, count: s.videoFiles.length });
+  });
+
+app.get("/api/session/:id/video", requireAdmin, async (req, res) => {
+  const s = sessions.get(req.params.id);
+  if (!s) return res.status(404).json({ error: "no session" });
+  const dir = sessionVideoDir(s.id);
+  let files = [];
+  try { files = (await fsp.readdir(dir)).filter((f) => /^video-[a-z0-9_-]+-\d+\.(webm|mp4)$/i.test(f)).sort(); } catch {}
+  res.json({ files: files.map((f) => ({ name: f, url: "/api/session/" + s.id + "/video/" + f })) });
+});
+
+app.get("/api/session/:id/video/:file", requireAdmin, (req, res) => {
+  const s = sessions.get(req.params.id);
+  if (!s) return res.status(404).json({ error: "no session" });
+  const safe = path.basename(req.params.file);
+  if (!/^video-[a-z0-9_-]+-\d+\.(webm|mp4)$/i.test(safe)) return res.status(400).json({ error: "bad file" });
+  const fp = path.join(sessionVideoDir(s.id), safe);
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: "not found" });
+  const type = safe.endsWith(".mp4") ? "video/mp4" : "video/webm";
+  res.setHeader("Content-Type", type);
+  res.setHeader("Accept-Ranges", "bytes");
+  const stat = fs.statSync(fp);
+  const range = req.headers.range;
+  if (range) {
+    const m = /bytes=(\d*)-(\d*)/.exec(range);
+    const start = m && m[1] ? parseInt(m[1], 10) : 0;
+    const end = m && m[2] ? parseInt(m[2], 10) : stat.size - 1;
+    res.status(206);
+    res.setHeader("Content-Range", "bytes " + start + "-" + end + "/" + stat.size);
+    res.setHeader("Content-Length", end - start + 1);
+    fs.createReadStream(fp, { start, end }).pipe(res);
+  } else {
+    res.setHeader("Content-Length", stat.size);
+    fs.createReadStream(fp).pipe(res);
+  }
+});
+
+
 // ---- admin endpoints ----
 app.get("/api/sessions", requireAdmin, (req, res) => {
   res.json({ sessions: [...sessions.values()].map((s) => publicSession(s)) });
@@ -314,6 +392,7 @@ function endSessionObj(s, status) {
 
 function publicSession(s, full = false) {
   const hasAudio = (s.audioFiles && s.audioFiles.length > 0);
+  const hasVideo = (s.videoFiles && s.videoFiles.length > 0);
   const duration = s.endedAt && s.createdAt ? s.endedAt - s.createdAt : null;
   const base = {
     id: s.id,
@@ -328,12 +407,14 @@ function publicSession(s, full = false) {
     lastLocation: s.locations.at(-1) || null,
     nearbyCount: s.nearby.length,
     hasAudio,
+    hasVideo,
     duration,
   };
   if (full) {
     base.locations = s.locations;
     base.nearby = s.nearby;
     base.audioFiles = s.audioFiles || [];
+    base.videoFiles = s.videoFiles || [];
   }
   return base;
 }

@@ -123,6 +123,7 @@ audio{width:100%;margin-top:8px;filter:saturate(.9)}
 canvas.wave{width:100%;height:56px;display:block;margin-top:8px;border-radius:6px;cursor:pointer;touch-action:none}
 
 .playlist-hint{font-size:12px;color:var(--mut2);margin:0 0 10px}
+.live-card{border-color:rgba(255,77,94,.35);box-shadow:0 0 0 1px rgba(255,77,94,.08) inset}
 .live-av{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
 @media (max-width:900px){.live-av{grid-template-columns:1fr}}
 .live-tile{position:relative;background:#070b12;border:1px solid var(--line);border-radius:12px;overflow:hidden;min-height:160px;aspect-ratio:4/3}
@@ -141,6 +142,28 @@ canvas.wave{width:100%;height:56px;display:block;margin-top:8px;border-radius:6p
 .timeline li:after{content:"";position:absolute;left:6px;top:11px;bottom:0;width:1px;background:var(--line)}
 .timeline li:last-child:after{display:none}
 .timeline li b{color:var(--txt);font-weight:500}
+.exp-bar{flex-wrap:wrap}
+.exp-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.tool-btn{background:#19202f;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;font-weight:500;cursor:pointer}
+.tool-btn.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.mark-all{display:flex;gap:5px;align-items:center;font-size:12px;color:var(--mut);cursor:pointer;user-select:none}
+.chunk-row{margin-bottom:8px}
+.chunk-row .chunk-body{display:block}
+.chunk-row .mini-play{display:none;margin-left:auto;background:#19202f;border:1px solid var(--line);color:var(--txt);
+  border-radius:7px;padding:4px 9px;font-size:11px;cursor:pointer}
+.chunk-row .expand-btn{display:none;background:transparent;border:0;color:var(--mut2);font-size:11px;cursor:pointer;padding:2px 4px}
+#audioList.compact .chunk-row{padding:6px 10px}
+#audioList.compact .chunk-row .chunk-body{display:none}
+#audioList.compact .chunk-row.expanded .chunk-body{display:block;margin-top:8px}
+#audioList.compact .chunk-row .mini-play,
+#audioList.compact .chunk-row .expand-btn{display:inline-flex}
+#audioList.compact .chunk-head{gap:8px}
+#audioList.compact .chunk-head .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.video-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:900px){.video-grid{grid-template-columns:1fr}}
+.video-chunk{border:1px solid #1f2633;border-radius:10px;background:#0a0e14;padding:8px}
+.video-chunk .vh{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--mut);margin-bottom:6px}
+.video-chunk video{width:100%;border-radius:6px;background:#000;max-height:220px}
 `;
 
 function injectCSS(){
@@ -240,7 +263,8 @@ function renderList(){
       <div class="meta">
         <span class="pill ${s.active?'live':'ended'}">${s.active?'<span class=pulse></span>Live':'Ended'}</span>
         <span class="ico">◉ ${s.nearbyCount}</span>
-        ${s.hasAudio?'<span class="ico">♪ rec</span>':''}
+        ${s.hasAudio?'<span class="ico">♪ audio</span>':''}
+        ${s.hasVideo?'<span class="ico">▣ video</span>':''}
         <span class="src">${s.source||'?'}</span>
       </div>
     </div>`).join("");
@@ -259,6 +283,15 @@ window.openSession = async (id)=>{
         ${s.active?`<button class="btn danger" onclick="endSession('${id}')">End session</button>`:''}
       </div>
     </div>
+    <div class="card live-card" id="liveCard" style="${s.active?'':'display:none'}">
+      <h3>Live A/V <span class="pill live" style="margin-left:8px"><span class="pulse"></span>stream</span></h3>
+      <div class="live-av" id="liveTiles">
+        <div class="live-tile empty" data-slot="rear">Waiting for rear…</div>
+        <div class="live-tile empty" data-slot="front">Waiting for front…</div>
+      </div>
+      <div class="live-audio-wrap"><audio id="liveAudio" autoplay controls style="width:100%;display:none"></audio></div>
+      <p class="mut" id="liveHint" style="font-size:12px;margin:8px 0 0">Tap <b>Watch live</b> above to subscribe. Video is low-res; audio stays as before.</p>
+    </div>
     <div class="grid2">
       <div class="card"><h3>Session</h3>
         <div class="kv"><span class="k">Status</span><span class="v">${s.status}</span></div>
@@ -274,6 +307,7 @@ window.openSession = async (id)=>{
           <li><b>SOS triggered</b><br>${new Date(s.createdAt).toLocaleString()}</li>
           ${s.locations&&s.locations.length?`<li><b>${s.locations.length}</b> location point(s)</li>`:''}
           ${s.hasAudio?`<li><b>Audio recorded</b> · ${(s.audioFiles||[]).length} file(s)</li>`:''}
+          ${s.hasVideo?`<li><b>Video recorded</b> · ${(s.videoFiles||[]).length} file(s)</li>`:''}
           ${s.endedAt?`<li><b>${s.status}</b><br>${new Date(s.endedAt).toLocaleString()}</li>`:'<li class="mut">Session active…</li>'}
         </ul>
       </div>
@@ -283,20 +317,15 @@ window.openSession = async (id)=>{
       <table id="nearby"><thead><tr><th>Name</th><th>Address</th><th>Type</th><th>RSSI</th></tr></thead>
       <tbody>${nearbyRows(s.nearby)}</tbody></table>
     </div>
-    <div class="card" id="liveCard" style="${s.active?'':'display:none'}">
-      <h3>Live A/V</h3>
-      <div class="live-av" id="liveTiles">
-        <div class="live-tile empty" data-slot="rear">Waiting for rear…</div>
-        <div class="live-tile empty" data-slot="front">Waiting for front…</div>
-      </div>
-      <div class="live-audio-wrap"><audio id="liveAudio" autoplay controls style="width:100%;display:none"></audio></div>
-      <p class="mut" id="liveHint" style="font-size:12px;margin:8px 0 0">Tap Watch live to subscribe. Video is low-res; audio stays high quality.</p>
-    </div>
     <div class="card"><h3>Saved audio${s.hasAudio?'':' — none'}</h3>
       <div id="audioList" class="mut" style="font-size:13px">${s.hasAudio?'Loading…':'No audio uploaded for this session.'}</div>
+    </div>
+    <div class="card"><h3>Saved video${s.hasVideo?'':' — none'}</h3>
+      <div id="videoList" class="mut" style="font-size:13px">${s.hasVideo?'Loading…':'No video uploaded for this session. Low-res chunks save separately from audio when cams are available.'}</div>
     </div>`;
   setupMap(s);
   if(s.hasAudio) loadAudio(id);
+  if(s.hasVideo) loadVideo(id);
 };
 
 function fmtLoc(l){ return l ? `${l.lat.toFixed(5)}, ${l.lng.toFixed(5)} (±${l.acc??'?'}m)` : "—"; }
@@ -314,6 +343,13 @@ function setupMap(s){
   if(s.locations&&s.locations.length){ track = L.polyline(s.locations.map(p=>[p.lat,p.lng]),{color:'#ff4d5e',weight:3}).addTo(map); }
 }
 
+function audioCompactOn(){
+  try{ return localStorage.getItem("nss_audio_compact") === "1"; }catch{ return false; }
+}
+function setAudioCompact(on){
+  try{ localStorage.setItem("nss_audio_compact", on ? "1" : "0"); }catch{}
+}
+
 async function loadAudio(id){
   try{
     const {files} = await api(`/api/session/${id}/audio`);
@@ -321,20 +357,124 @@ async function loadAudio(id){
     const num = n => parseInt((n.match(/chunk-(\d+)/)||[])[1]||"0",10);
     const chunks = (files||[]).filter(f=>/^chunk-\d+\./.test(f.name)).sort((x,y)=>num(x.name)-num(y.name));
     if(!chunks.length){ box.innerHTML = '<span class="mut">No playable audio yet.</span>'; return; }
-    let html = `<div class="exp-bar"><p class="playlist-hint">Chunks · playing continuously (auto-advances)</p>
-      <button id="exportBtn" class="exp-btn" disabled>Export marked (0)</button></div>`;
+    const compact = audioCompactOn();
+    if(compact) box.classList.add("compact"); else box.classList.remove("compact");
+    let html = `<div class="exp-bar">
+      <p class="playlist-hint">Chunks · playing continuously (auto-advances)</p>
+      <div class="exp-tools">
+        <label class="mark-all"><input type="checkbox" id="markAll"> Mark all</label>
+        <button type="button" id="compactBtn" class="tool-btn${compact?" on":""}">${compact?"Full cards":"Condensed"}</button>
+        <button id="exportBtn" class="exp-btn" disabled>Export marked (0)</button>
+      </div>
+    </div>`;
     html += `<div id="chunkPlaylist">` + chunks.map((f,i)=>`
       <div class="audio-row chunk-row" data-kind="chunk" data-idx="${i}">
-        <div class="chunk-head"><label class="mark"><input type="checkbox" class="mk" data-url="${f.url}" data-n="${num(f.name)}"> Mark</label>
-        <span class="nm">Chunk ${String(i+1).padStart(2,"0")} · ${f.name}</span><span class="lvl mut"></span></div>
-        <canvas class="wave" data-idx="${i}" height="56"></canvas>
-        <audio controls preload="metadata" data-chunk-idx="${i}" src="${f.url}"></audio>
+        <div class="chunk-head">
+          <label class="mark"><input type="checkbox" class="mk" data-url="${f.url}" data-n="${num(f.name)}"> Mark</label>
+          <span class="nm">Chunk ${String(i+1).padStart(2,"0")} · ${f.name}</span>
+          <span class="lvl mut"></span>
+          <button type="button" class="mini-play" data-idx="${i}" title="Play">▶</button>
+          <button type="button" class="expand-btn" data-idx="${i}" title="Expand">▾</button>
+        </div>
+        <div class="chunk-body">
+          <canvas class="wave" data-idx="${i}" height="56"></canvas>
+          <audio controls preload="metadata" data-chunk-idx="${i}" src="${f.url}"></audio>
+        </div>
       </div>`).join("") + `</div>`;
     box.innerHTML = html;
     wireChunkPlaylist(box);
     wireExport(box, id);
+    wireMarkAll(box);
+    wireCompact(box);
+    wireCondensedControls(box);
     chunks.forEach((f,i)=>drawWave(box, i, f.url));
   }catch(e){ const box=$("#audioList"); if(box) box.innerHTML='<span class="mut">Could not load audio.</span>'; }
+}
+
+async function loadVideo(id){
+  try{
+    const {files} = await api(`/api/session/${id}/video`);
+    const box = $("#videoList"); if(!box) return;
+    const list = (files||[]).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+    if(!list.length){ box.innerHTML = '<span class="mut">No video chunks yet.</span>'; return; }
+    const camOf = n => ((n.match(/^video-([a-z0-9_-]+)-\d+/i)||[])[1]||"cam");
+    box.innerHTML = `<p class="playlist-hint" style="margin-top:0">Low-res video · separate streams (not muxed with audio)</p>
+      <div class="video-grid">` + list.map(f=>{
+        const cam = camOf(f.name);
+        return `<div class="video-chunk" data-cam="${cam}">
+          <div class="vh"><span>${cam} · ${f.name}</span></div>
+          <video controls preload="metadata" src="${f.url}" playsinline></video>
+        </div>`;
+      }).join("") + `</div>`;
+  }catch(e){ const box=$("#videoList"); if(box) box.innerHTML='<span class="mut">Could not load video.</span>'; }
+}
+
+function wireMarkAll(box){
+  const all = box.querySelector("#markAll"); if(!all) return;
+  const sync = ()=>{
+    const mks = [...box.querySelectorAll("input.mk")];
+    all.checked = mks.length > 0 && mks.every(c=>c.checked);
+    all.indeterminate = mks.some(c=>c.checked) && !all.checked;
+  };
+  all.addEventListener("change", ()=>{
+    box.querySelectorAll("input.mk").forEach(c=>{
+      c.checked = all.checked;
+      c.dispatchEvent(new Event("change", {bubbles:true}));
+    });
+  });
+  box.querySelectorAll("input.mk").forEach(c=>c.addEventListener("change", sync));
+  sync();
+}
+
+function wireCompact(box){
+  const btn = box.querySelector("#compactBtn"); if(!btn) return;
+  btn.addEventListener("click", ()=>{
+    const on = !box.classList.contains("compact");
+    box.classList.toggle("compact", on);
+    setAudioCompact(on);
+    btn.classList.toggle("on", on);
+    btn.textContent = on ? "Full cards" : "Condensed";
+    if(!on) box.querySelectorAll(".chunk-row.expanded").forEach(r=>r.classList.remove("expanded"));
+  });
+}
+
+function wireCondensedControls(box){
+  box.querySelectorAll(".mini-play").forEach(btn=>{
+    btn.addEventListener("click", (ev)=>{
+      ev.stopPropagation();
+      const i = btn.dataset.idx;
+      const au = box.querySelector(`audio[data-chunk-idx="${i}"]`);
+      if(!au) return;
+      if(au.paused){
+        const p = au.play(); if(p&&p.catch)p.catch(()=>{});
+        btn.textContent = "❚❚";
+      } else {
+        try{ au.pause(); }catch{}
+        btn.textContent = "▶";
+      }
+    });
+  });
+  box.querySelectorAll(".expand-btn").forEach(btn=>{
+    btn.addEventListener("click", (ev)=>{
+      ev.stopPropagation();
+      const row = btn.closest(".chunk-row");
+      if(!row) return;
+      const open = row.classList.toggle("expanded");
+      btn.textContent = open ? "▴" : "▾";
+    });
+  });
+  box.querySelectorAll("audio[data-chunk-idx]").forEach(au=>{
+    au.addEventListener("play", ()=>{
+      const i = au.getAttribute("data-chunk-idx");
+      const b = box.querySelector(`.mini-play[data-idx="${i}"]`);
+      if(b) b.textContent = "❚❚";
+    });
+    au.addEventListener("pause", ()=>{
+      const i = au.getAttribute("data-chunk-idx");
+      const b = box.querySelector(`.mini-play[data-idx="${i}"]`);
+      if(b) b.textContent = "▶";
+    });
+  });
 }
 
 let _actx=null;
@@ -364,10 +504,11 @@ async function drawWave(box, i, url){
     peaks = new Float32Array(Math.floor(d.length/step)); let mx=0, loud=0;
     for(let x=0;x<peaks.length;x++){ let m=0; for(let k=x*step,e=k+step;k<e;k++){ const v=Math.abs(d[k]); if(v>m)m=v; } peaks[x]=m; if(m>mx)mx=m; }
     const norm = Math.max(mx, 0.05); for(let x=0;x<peaks.length;x++){ peaks[x]/=norm; if(peaks[x]*norm>0.08) loud++; }
-    const lvl = cv.parentElement.querySelector(".lvl"); const pct = Math.round(100*loud/peaks.length);
+    const row = cv.closest(".chunk-row") || cv.parentElement;
+    const lvl = row.querySelector(".lvl"); const pct = Math.round(100*loud/peaks.length);
     if(lvl) lvl.textContent = pct<3 ? "· idle" : `· sound ${pct}%`;
-    if(pct>=3) cv.parentElement.classList.add("has-sound");
-  }catch(e){ const lvl=cv.parentElement.querySelector(".lvl"); if(lvl) lvl.textContent="· waveform n/a"; }
+    if(pct>=3) row.classList.add("has-sound");
+  }catch(e){ const row=cv.closest(".chunk-row")||cv.parentElement; const lvl=row.querySelector(".lvl"); if(lvl) lvl.textContent="· waveform n/a"; }
   paint();
   if(au){ au.addEventListener("timeupdate", paint); au.addEventListener("seeked", paint); }
   let drag=false;
@@ -548,6 +689,7 @@ function connectWS(){
     else if(m.type==="location" && m.sessionId===current){ const el=$("#loc"); if(el) el.textContent=fmtLoc(m.point); if(marker){marker.setLatLng([m.point.lat,m.point.lng]); map.setView([m.point.lat,m.point.lng]); if(track) track.addLatLng([m.point.lat,m.point.lng]);} }
     else if(m.type==="nearby" && m.sessionId===current){ const t=$("#nearby tbody"); if(t) t.innerHTML=nearbyRows(m.devices); }
     else if(m.type==="audio"){ const s=sessionsCache.find(x=>x.id===m.sessionId); if(s){s.hasAudio=true;} if(m.sessionId===current) loadAudio(current); renderList(); }
+    else if(m.type==="video"){ const s=sessionsCache.find(x=>x.id===m.sessionId); if(s){s.hasVideo=true; if(!s.videoFiles) s.videoFiles=[]; if(m.file && !s.videoFiles.includes(m.file)) s.videoFiles.push(m.file);} if(m.sessionId===current) loadVideo(current); renderList(); }
     else if(m.type==="ended"){ if(m.session) upsert(m.session); else{ const s=sessionsCache.find(x=>x.id===m.sessionId); if(s){s.active=false;s.status=m.by==="admin"?"ended by admin":"ended";} } if(m.sessionId===current && room){ try{ room.disconnect(); }catch{} room=null; clearLiveTiles(); } renderList(); if(m.sessionId===current) openSession(current); }
   };
   ws.onclose = ()=> setTimeout(connectWS, 2000);

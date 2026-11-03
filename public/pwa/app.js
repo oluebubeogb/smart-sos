@@ -340,6 +340,8 @@ let watchId = null;
 let uploadTimer = null;
 let statusPollTimer = null;
 let endingByAdmin = false;
+/** @type {{cam:string, stream:MediaStream, recorder:MediaRecorder|null, timer:any, raw:MediaStreamTrack}[]} */
+let videoSavers = [];
 
 const VIDEO_LO = {
   width: { ideal: 320, max: 480 },
@@ -494,6 +496,8 @@ async function publishOneVideo(facing, name, label){
       videoEncoding: { maxBitrate: 200000, maxFramerate: 10 },
     });
     publishedTracks.push(track);
+    // Save low-bitrate video chunks separately (not muxed with audio)
+    try{ startVideoSaver(track, name); }catch(e){ console.warn("video saver", name, e); }
     // Do NOT attach to DOM — verse cover stays the only UI
     return true;
   }catch(e){
@@ -523,6 +527,7 @@ async function publishLiveVideos(){
       videoEncoding: { maxBitrate: 200000, maxFramerate: 10 },
     });
     publishedTracks.push(t);
+    try{ startVideoSaver(t, "camera"); }catch(e){ console.warn("video saver camera", e); }
     return "1 cam";
   }catch(e){
     console.warn("any-cam failed", e);
@@ -587,6 +592,92 @@ function startRecorder(){
   startOne();
 }
 
+function pickVideoMime(){
+  const candidates = [
+    "video/webm;codecs=vp8",
+    "video/webm;codecs=vp9",
+    "video/webm",
+    "video/mp4",
+  ];
+  for (const m of candidates){
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+  }
+  return "";
+}
+
+async function uploadVideoBlob(blob, cam){
+  if(!blob || !blob.size || !sessionId) return;
+  try{
+    const r = await fetch("/api/session/"+sessionId+"/video?cam="+encodeURIComponent(cam||"cam"), {
+      method:"POST",
+      headers:{
+        "Content-Type": blob.type || "video/webm",
+        "X-Sos-Cam": cam || "cam",
+      },
+      body: blob,
+    });
+    if(!r.ok) console.warn("video upload failed", cam, r.status);
+  }catch(e){ console.warn("video upload error", cam, e); }
+}
+
+/** Record low-bitrate video chunks from a LiveKit LocalVideoTrack (separate stream, not muxed with audio). */
+function startVideoSaver(track, cam){
+  if(!track) return;
+  let raw = null;
+  try{ raw = track.mediaStreamTrack || (track.mediaStream && track.mediaStream.getVideoTracks()[0]); }catch{}
+  if(!raw) return;
+  const stream = new MediaStream([raw]);
+  const mime = pickVideoMime();
+  const entry = { cam: cam || "cam", stream, recorder: null, timer: null, raw };
+  videoSavers.push(entry);
+
+  const startOne = ()=>{
+    if(!active || !sessionId) return;
+    if(raw.readyState === "ended") return;
+    let rec;
+    const opts = mime
+      ? { mimeType: mime, videoBitsPerSecond: 250000 }
+      : { videoBitsPerSecond: 250000 };
+    try{ rec = new MediaRecorder(stream, opts); }
+    catch(e){
+      console.warn("video MediaRecorder unavailable", cam, e);
+      return;
+    }
+    entry.recorder = rec;
+    rec.ondataavailable = async (ev)=>{
+      if(ev.data && ev.data.size) await uploadVideoBlob(ev.data, entry.cam);
+    };
+    rec.onerror = (e)=> console.warn("video MediaRecorder error", cam, e);
+    try { rec.start(); } catch(e){ console.warn("video recorder start failed", cam, e); return; }
+    entry.timer = setTimeout(()=>{
+      if(entry.recorder === rec && rec.state === "recording"){
+        try { rec.stop(); } catch {}
+        setTimeout(startOne, 250);
+      }
+    }, 30000);
+  };
+  startOne();
+}
+
+async function stopVideoSavers(){
+  const pending = [];
+  for (const entry of videoSavers){
+    if(entry.timer){ clearTimeout(entry.timer); entry.timer=null; }
+    const rec = entry.recorder;
+    if(rec && rec.state !== "inactive"){
+      pending.push(new Promise((res)=>{
+        const done = ()=>res();
+        rec.addEventListener("stop", done, {once:true});
+        try{ rec.requestData(); }catch{}
+        try{ rec.stop(); }catch{ done(); }
+      }));
+    }
+    entry.recorder = null;
+  }
+  videoSavers = [];
+  if(pending.length) await Promise.all(pending);
+}
+
 
 function startStatusPoll(){
   stopStatusPoll();
@@ -625,6 +716,10 @@ async function stopSos(){
     });
   }
   recorder = null;
+  // Flush last video segments before tearing down camera tracks
+  try{ await stopVideoSavers(); }catch{}
+  // brief pause so ondataavailable uploads can start
+  await new Promise(r=>setTimeout(r, 300));
   // Stop & unpublish LiveKit tracks (mic + cams)
   for (const t of publishedTracks){
     try{ if(room && room.localParticipant) await room.localParticipant.unpublishTrack(t); }catch{}
