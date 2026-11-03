@@ -252,7 +252,7 @@ app.get("/api/session/:id/audio", requireAdmin, async (req, res) => {
   const chunks = files.filter((f) => /^chunk-\d+\./.test(f)).sort();
   const other = files.filter((f) => !recs.includes(f) && !chunks.includes(f)).sort();
   // Always return full recording (if any) AND all chunks — never drop segments.
-  const ordered = [...recs, ...chunks, ...other];
+  const ordered = [...chunks, ...other]; // full recording hidden from admin UI (kept on disk)
   res.json({ files: ordered.map((f) => ({ name: f, url: "/api/session/" + s.id + "/audio/" + f })) });
 });
 

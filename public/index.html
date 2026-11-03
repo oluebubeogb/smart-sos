@@ -112,6 +112,16 @@ audio{width:100%;margin-top:8px;filter:saturate(.9)}
 .audio-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:13px}
 .audio-row .nm{color:var(--mut);min-width:140px}
 .audio-row.playing .nm{color:var(--accent)}
+.exp-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.exp-btn{background:#ff4d5e;color:#fff;border:0;border-radius:8px;padding:7px 12px;font-weight:600;cursor:pointer}
+.exp-btn:disabled{opacity:.4;cursor:default}
+.chunk-row{display:block;padding:10px;border:1px solid #1f2633;border-radius:10px;background:#0a0e14}
+.chunk-row.marked{border-color:#ff4d5e}
+.chunk-row.has-sound .lvl{color:#ffb020}
+.chunk-head{display:flex;gap:10px;align-items:center;font-size:13px}
+.mark{display:flex;gap:4px;align-items:center;cursor:pointer;color:var(--mut)}
+canvas.wave{width:100%;height:56px;display:block;margin-top:8px;border-radius:6px;cursor:pointer;touch-action:none}
+
 .playlist-hint{font-size:12px;color:var(--mut2);margin:0 0 10px}
 .footer{grid-column:1/3;padding:9px 18px;border-top:1px solid var(--line);color:var(--mut2);
   font-size:11.5px;background:#0c121e;display:flex;align-items:center;gap:7px}
@@ -292,29 +302,85 @@ async function loadAudio(id){
   try{
     const {files} = await api(`/api/session/${id}/audio`);
     const box = $("#audioList"); if(!box) return;
-    if(!files || !files.length){ box.innerHTML = '<span class="mut">No audio files.</span>'; return; }
-    const recs = files.filter(f=>f.name.startsWith("recording"));
-    const chunks = files.filter(f=>f.name.startsWith("chunk-"));
-    // Keep BOTH: full recording (best-effort) and every chunk (source of truth / playlist).
-    if(!recs.length && !chunks.length){ box.innerHTML = '<span class="mut">No playable audio yet.</span>'; return; }
-    let html = "";
-    for (const f of recs){
-      html += `<div class="audio-row" data-kind="full">
-        <span class="nm">Full recording</span>
-        <audio controls preload="metadata" src="${f.url}"></audio>
-      </div>`;
-    }
-    if(chunks.length){
-      html += `<p class="playlist-hint">Chunks · playing continuously (auto-advances)</p>`;
-      html += `<div id="chunkPlaylist">` + chunks.map((f,i)=>`
-      <div class="audio-row" data-kind="chunk" data-idx="${i}">
-        <span class="nm">Chunk ${String(i+1).padStart(2,"0")} · ${f.name}</span>
+    const num = n => parseInt((n.match(/chunk-(\d+)/)||[])[1]||"0",10);
+    const chunks = (files||[]).filter(f=>/^chunk-\d+\./.test(f.name)).sort((x,y)=>num(x.name)-num(y.name));
+    if(!chunks.length){ box.innerHTML = '<span class="mut">No playable audio yet.</span>'; return; }
+    let html = `<div class="exp-bar"><p class="playlist-hint">Chunks · playing continuously (auto-advances)</p>
+      <button id="exportBtn" class="exp-btn" disabled>Export marked (0)</button></div>`;
+    html += `<div id="chunkPlaylist">` + chunks.map((f,i)=>`
+      <div class="audio-row chunk-row" data-kind="chunk" data-idx="${i}">
+        <div class="chunk-head"><label class="mark"><input type="checkbox" class="mk" data-url="${f.url}" data-n="${num(f.name)}"> Mark</label>
+        <span class="nm">Chunk ${String(i+1).padStart(2,"0")} · ${f.name}</span><span class="lvl mut"></span></div>
+        <canvas class="wave" data-idx="${i}" height="56"></canvas>
         <audio controls preload="metadata" data-chunk-idx="${i}" src="${f.url}"></audio>
       </div>`).join("") + `</div>`;
-    }
     box.innerHTML = html;
     wireChunkPlaylist(box);
+    wireExport(box, id);
+    chunks.forEach((f,i)=>drawWave(box, i, f.url));
   }catch(e){ const box=$("#audioList"); if(box) box.innerHTML='<span class="mut">Could not load audio.</span>'; }
+}
+
+let _actx=null;
+async function drawWave(box, i, url){
+  const cv = box.querySelector(`canvas.wave[data-idx="${i}"]`); const au = box.querySelector(`audio[data-chunk-idx="${i}"]`);
+  if(!cv) return;
+  const W = cv.width = Math.max(300, cv.clientWidth*devicePixelRatio||600), H = cv.height = 56*devicePixelRatio;
+  const g = cv.getContext("2d");
+  let peaks=null, dur=0;
+  const paint = ()=>{
+    g.clearRect(0,0,W,H); g.fillStyle="#0d1117"; g.fillRect(0,0,W,H);
+    if(!peaks){ g.fillStyle="#3a4150"; g.fillRect(0,H/2-1,W,2); return; }
+    const pos = au && dur ? au.currentTime/dur : 0;
+    for(let x=0;x<peaks.length;x++){
+      const h = Math.max(1.5*devicePixelRatio, peaks[x]*(H-6));
+      const hot = peaks[x] > 0.25;
+      g.fillStyle = x/peaks.length <= pos ? "#ff4d5e" : (hot ? "#e9edf5" : "#4a5263");
+      g.fillRect(x, (H-h)/2, 1, h);
+    }
+  };
+  paint();
+  try{
+    const buf = await (await fetch(url,{credentials:"same-origin"})).arrayBuffer();
+    _actx = _actx || new (window.AudioContext||window.webkitAudioContext)();
+    const ab = await _actx.decodeAudioData(buf);
+    dur = ab.duration; const d = ab.getChannelData(0); const step = Math.max(1, Math.floor(d.length/W));
+    peaks = new Float32Array(Math.floor(d.length/step)); let mx=0, loud=0;
+    for(let x=0;x<peaks.length;x++){ let m=0; for(let k=x*step,e=k+step;k<e;k++){ const v=Math.abs(d[k]); if(v>m)m=v; } peaks[x]=m; if(m>mx)mx=m; }
+    const norm = Math.max(mx, 0.05); for(let x=0;x<peaks.length;x++){ peaks[x]/=norm; if(peaks[x]*norm>0.08) loud++; }
+    const lvl = cv.parentElement.querySelector(".lvl"); const pct = Math.round(100*loud/peaks.length);
+    if(lvl) lvl.textContent = pct<3 ? "· idle" : `· sound ${pct}%`;
+    if(pct>=3) cv.parentElement.classList.add("has-sound");
+  }catch(e){ const lvl=cv.parentElement.querySelector(".lvl"); if(lvl) lvl.textContent="· waveform n/a"; }
+  paint();
+  if(au){ au.addEventListener("timeupdate", paint); au.addEventListener("seeked", paint); }
+  let drag=false;
+  const seek = ev=>{ if(!au) return; const r=cv.getBoundingClientRect(); const f=Math.min(1,Math.max(0,(ev.clientX-r.left)/r.width));
+    const d2 = dur || au.duration; if(isFinite(d2)&&d2>0){ au.currentTime=f*d2; paint(); } };
+  cv.addEventListener("pointerdown", ev=>{ drag=true; cv.setPointerCapture(ev.pointerId); seek(ev); if(au&&au.paused){ const p=au.play(); if(p&&p.catch)p.catch(()=>{}); } });
+  cv.addEventListener("pointermove", ev=>{ if(drag) seek(ev); });
+  cv.addEventListener("pointerup", ()=>{ drag=false; });
+}
+
+function wireExport(box, id){
+  const btn = box.querySelector("#exportBtn"); if(!btn) return;
+  const marked = ()=>[...box.querySelectorAll("input.mk:checked")].sort((a,b)=>a.dataset.n-b.dataset.n);
+  box.querySelectorAll("input.mk").forEach(c=>c.addEventListener("change", ()=>{
+    const n = marked().length; btn.textContent = `Export marked (${n})`; btn.disabled = !n;
+    c.closest(".chunk-row").classList.toggle("marked", c.checked);
+  }));
+  btn.addEventListener("click", async ()=>{
+    const list = marked(); if(!list.length) return;
+    btn.disabled = true; const old = btn.textContent; btn.textContent = "Exporting…";
+    try{
+      const parts = [];
+      for(const c of list){ const r = await fetch(c.dataset.url,{credentials:"same-origin"}); if(!r.ok) throw new Error("fetch "+r.status); parts.push(await r.arrayBuffer()); }
+      const blob = new Blob(parts, {type:"audio/webm"});
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `sos-${id}-export.webm`;
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href), 60000);
+    }catch(e){ alert("Export failed: "+e.message); }
+    btn.textContent = old; btn.disabled = false;
+  });
 }
 
 function wireChunkPlaylist(box){
