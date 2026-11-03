@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SOS Guard — Admin</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+<style>
+  :root{ --bg:#0f1420; --panel:#182135; --line:#263146; --txt:#e6ecf5; --mut:#8ea0ba; --red:#e5484d; --grn:#36b37e; }
+  *{box-sizing:border-box} body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--txt)}
+  header{display:flex;align-items:center;gap:12px;padding:12px 18px;background:var(--panel);border-bottom:1px solid var(--line)}
+  header h1{font-size:16px;margin:0;font-weight:600} header .sp{flex:1}
+  button{background:#2b3a57;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:13px}
+  button:hover{background:#34466a} button.danger{background:var(--red);border-color:var(--red)} button.go{background:var(--grn);border-color:var(--grn)}
+  .wrap{display:grid;grid-template-columns:320px 1fr;height:calc(100vh - 53px)}
+  .list{border-right:1px solid var(--line);overflow:auto}
+  .item{padding:12px 14px;border-bottom:1px solid var(--line);cursor:pointer}
+  .item:hover{background:#13203a} .item.sel{background:#1b2c4d}
+  .item .t{font-weight:600} .item .s{color:var(--mut);font-size:12px;margin-top:3px}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+  .dot.on{background:var(--grn)} .dot.off{background:#64748b}
+  .detail{overflow:auto;padding:16px}
+  #map{height:300px;border-radius:10px;border:1px solid var(--line);margin:10px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  table{width:100%;border-collapse:collapse;font-size:13px} td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  .mut{color:var(--mut)} .login{max-width:320px;margin:12vh auto;padding:24px;background:var(--panel);border:1px solid var(--line);border-radius:12px}
+  input{width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid var(--line);background:#0c1322;color:var(--txt)}
+  .badge{font-size:11px;padding:2px 7px;border-radius:999px;background:#2b3a57;color:var(--mut)}
+  footer{position:fixed;bottom:6px;right:10px;color:var(--mut);font-size:11px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<footer>SOS Guard demo · admin</footer>
+<script>
+const $ = (s,el=document)=>el.querySelector(s);
+let ws, current=null, map, marker, track, room;
+
+async function api(path, opts={}){
+  const r = await fetch(path, {credentials:"same-origin", headers:{"Content-Type":"application/json"}, ...opts});
+  if(r.status===401){ renderLogin(); throw new Error("unauth"); }
+  return r.json();
+}
+
+function renderLogin(msg){
+  document.getElementById("app").innerHTML = `
+  <div class="login">
+    <h2>SOS Guard — Admin</h2>
+    <p class="mut">Demo login: admin / admin</p>
+    <input id="u" placeholder="username" value="admin"/>
+    <input id="p" type="password" placeholder="password" value="admin"/>
+    <button class="go" style="width:100%;margin-top:8px" onclick="doLogin()">Sign in</button>
+    <p style="color:#e5484d">${msg||""}</p>
+  </div>`;
+}
+window.doLogin = async ()=>{
+  const r = await fetch("/api/login",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({username:$("#u").value,password:$("#p").value})});
+  if(r.ok) start(); else renderLogin("Invalid credentials");
+};
+
+function renderApp(){
+  document.getElementById("app").innerHTML = `
+  <header><h1>🛡️ SOS Guard</h1><span class="badge">LIVE</span><div class="sp"></div>
+    <button onclick="logout()">Log out</button></header>
+  <div class="wrap">
+    <div class="list" id="list"></div>
+    <div class="detail" id="detail"><p class="mut">Select an alert to open the live session.</p></div>
+  </div>`;
+}
+window.logout = async ()=>{ await fetch("/api/logout",{method:"POST",credentials:"same-origin"}); location.reload(); };
+
+let sessionsCache = [];
+function renderList(){
+  const el = $("#list");
+  if(!sessionsCache.length){ el.innerHTML = `<p class="mut" style="padding:14px">No alerts yet. Trigger SOS from the device.</p>`; return; }
+  el.innerHTML = sessionsCache.sort((a,b)=>b.createdAt-a.createdAt).map(s=>`
+    <div class="item ${current===s.id?'sel':''}" onclick="openSession('${s.id}')">
+      <div class="t"><span class="dot ${s.active?'on':'off'}"></span>${s.decoyName} · ${s.id}</div>
+      <div class="s">${new Date(s.createdAt).toLocaleString()} · ${s.status}</div>
+      <div class="s">device ${s.deviceId} · nearby ${s.nearbyCount}</div>
+    </div>`).join("");
+}
+
+window.openSession = async (id)=>{
+  current=id; renderList();
+  const s = await api(`/api/session/${id}`);
+  const d = $("#detail");
+  d.innerHTML = `
+    <div class="row"><h2 style="margin:0">${s.decoyName} · ${s.id}</h2>
+      <span class="badge">${s.active?'ACTIVE':'ENDED'}</span><div class="sp" style="flex:1"></div>
+      <button class="go" id="listenBtn" onclick="startListen('${id}')">🎧 Listen live</button>
+      <button class="danger" onclick="endSession('${id}')">⏹ End session</button>
+    </div>
+    <div class="card"><b>Last location:</b> <span id="loc">${fmtLoc(s.lastLocation)}</span></div>
+    <div id="map"></div>
+    <div class="card"><b>Nearby devices (${s.nearby.length}/25)</b>
+      <table id="nearby"><thead><tr><th>Name</th><th>Address</th><th>Type</th><th>RSSI</th></tr></thead>
+      <tbody>${nearbyRows(s.nearby)}</tbody></table>
+    </div>
+    <audio id="audio" autoplay></audio>`;
+  setupMap(s);
+};
+
+function fmtLoc(l){ return l ? `${l.lat.toFixed(5)}, ${l.lng.toFixed(5)} (±${l.acc??'?'}m)` : "—"; }
+function nearbyRows(list){
+  if(!list.length) return `<tr><td colspan="4" class="mut">none reported</td></tr>`;
+  return list.map(d=>`<tr><td>${d.name||'(unknown)'}</td><td>${d.address||d.mac||''}</td><td>${d.type||'BT'}</td><td>${d.rssi??''}</td></tr>`).join("");
+}
+function setupMap(s){
+  if(map){ map.remove(); map=null; }
+  const l = s.lastLocation || {lat:6.5244,lng:3.3792};
+  map = L.map("map").setView([l.lat,l.lng], s.lastLocation?15:3);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
+  marker = L.marker([l.lat,l.lng]).addTo(map);
+  if(s.locations?.length){ track = L.polyline(s.locations.map(p=>[p.lat,p.lng]),{color:'#e5484d'}).addTo(map); }
+}
+
+window.startListen = async (id)=>{
+  const {livekitUrl, token} = await api(`/api/session/${id}/listen-token`);
+  try{
+    room = new LivekitClient.Room();
+    await room.connect(livekitUrl, token);
+    room.on(LivekitClient.RoomEvent.TrackSubscribed,(trk)=>{
+      if(trk.kind==='audio'){ const a=$("#audio"); a.srcObject=new MediaStream([trk.mediaStreamTrack]); a.play(); }
+    });
+    $("#listenBtn").textContent = "🔊 Listening…";
+  }catch(e){ alert("LiveKit connect failed: "+e.message+"\nCheck LIVEKIT_URL / keys."); }
+};
+window.endSession = async (id)=>{
+  await api(`/api/session/${id}/end`,{method:"POST"});
+  if(room){ room.disconnect(); room=null; }
+};
+
+function connectWS(){
+  const proto = location.protocol==="https:"?"wss":"ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onmessage = (ev)=>{
+    const m = JSON.parse(ev.data);
+    if(m.type==="hello"){ sessionsCache=m.sessions; renderList(); }
+    else if(m.type==="alert"){ upsert(m.session); renderList(); if(Notification.permission==="granted") new Notification("🚨 SOS",{body:m.session.decoyName}); }
+    else if(m.type==="location" && m.sessionId===current){ const el=$("#loc"); if(el) el.textContent=fmtLoc(m.point); if(marker){marker.setLatLng([m.point.lat,m.point.lng]); map.setView([m.point.lat,m.point.lng]); if(track) track.addLatLng([m.point.lat,m.point.lng]);} }
+    else if(m.type==="nearby" && m.sessionId===current){ const t=$("#nearby tbody"); if(t) t.innerHTML=nearbyRows(m.devices); }
+    else if(m.type==="ended"){ const s=sessionsCache.find(x=>x.id===m.sessionId); if(s){s.active=false;s.status="ended";} renderList(); }
+  };
+  ws.onclose = ()=> setTimeout(connectWS, 2000);
+}
+function upsert(s){ const i=sessionsCache.findIndex(x=>x.id===s.id); if(i>=0) sessionsCache[i]=s; else sessionsCache.push(s); }
+
+async function start(){
+  try{ await api("/api/me"); }catch{ return; }
+  renderApp(); if("Notification" in window) Notification.requestPermission();
+  const data = await api("/api/sessions"); sessionsCache=data.sessions; renderList(); connectWS();
+}
+start().catch(()=>renderLogin());
+</script>
+</body>
+</html>

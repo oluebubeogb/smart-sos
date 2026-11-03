@@ -1,0 +1,18 @@
+# Coolify-friendly compose for the SOS Guard admin backend.
+# In Coolify: create a "Docker Compose" resource, point at this file,
+# set the env vars (see .env.example), attach to the same network as LiveKit
+# if you want internal addressing. Exposes 8080 (map a domain in Coolify).
+services:
+  sos-guard-server:
+    build: .
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      SESSION_SECRET: ${SESSION_SECRET:-change-me-demo-secret}
+      LIVEKIT_URL: ${LIVEKIT_URL:-wss://1v.collab.name.ng}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-secret}
+    ports:
+      - "8080:8080"

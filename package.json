@@ -1,0 +1,16 @@
+{
+  "name": "sos-guard-server",
+  "version": "1.0.0",
+  "description": "SOS Guard demo admin backend: alerts, sessions, LiveKit token mint",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0",
+    "cookie-parser": "^1.4.6",
+    "livekit-server-sdk": "^2.7.0"
+  }
+}
