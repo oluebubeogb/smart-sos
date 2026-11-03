@@ -155,6 +155,7 @@ curl -X POST "${P}/sessions/a1b2c3d4/audio" -H "X-API-Key: ${KEY}" -H "Content-T
 curl -X POST "${P}/sessions/a1b2c3d4/video?cam=front" -H "X-API-Key: ${KEY}" -H "Content-Type: video/webm" --data-binary @clip.webm
 curl -X POST ${P}/sessions/a1b2c3d4/end -H "X-API-Key: ${KEY}"
 curl ${P}/sessions?active=1 -H "X-API-Key: ${KEY}"</pre>
+  <p class="sm"><b>Media clips (archive):</b> upload self-contained <b>~60 s</b> segments. Audio-only: <code>audio/webm</code> or <code>audio/mp4</code>, max <b>25 MB</b>. Video clips include their own sound: <code>video/webm</code> or <code>video/mp4</code> (H.264+AAC on Android), max <b>40 MB</b>; label with <code>?cam=rear|front</code> (rear on phones, front on desktops). Clips are for history/download; live watching uses LiveKit (section 3).</p>
   <h4>Webhooks</h4><p class="sm">If a webhook URL is set, Smart SOS POSTs JSON events (<code>session.created</code>, <code>session.ended</code>, <code>ping</code>, …) signed with the key's webhook secret: header <code>X-SSOS-Signature: sha256=&lt;hex HMAC of raw body&gt;</code> (also sent as <code>X-NSS-Signature</code> for older integrations).</p>
 <pre>// Node verification
 const sig = "sha256=" + crypto.createHmac("sha256", WEBHOOK_SECRET).update(rawBody).digest("hex");
@@ -176,6 +177,26 @@ es.addEventListener("session.ended",  e =&gt; upsert(JSON.parse(e.data).session)
 &lt;script src="${host}/embed/smart-sos.js"&gt;&lt;/script&gt;
 &lt;script&gt;SmartSOS.mount(document.getElementById("sos"), { token: "${TOK}" });&lt;/script&gt;</pre>
   <p class="sm mut">Events: <code>snapshot</code>, <code>session.created</code>, <code>location</code>, <code>nearby</code>, <code>event</code>, <code>media</code>, <code>session.ended</code>. The stream resumes with <code>Last-Event-ID</code> and sends a heartbeat every 25s.</p></div>
+  <div class="card"><h3>3 · Live A/V (LiveKit) — publisher, viewer, renewal, end</h3>
+  <p class="sm">All calls use the partner <code>X-API-Key</code> from your <b>server</b>. The <code>ssos_pub_…</code> read token is for the website feed only — it <b>cannot</b> be used for live viewing or publishing.</p>
+  <p class="sm">Tokens are short-lived (default <b>15 min</b>, <code>LIVEKIT_TOKEN_TTL_SECONDS</code>) and bound to the session's current room <code>sos-&lt;id&gt;-&lt;epoch&gt;</code>. Always use the <code>url</code>/<code>room</code> from the latest response; renew ~1–2 min before <code>expiresAt</code> (needed only to (re)connect).</p>
+<pre># create with live publish credentials
+curl -X POST ${P}/sessions -H "X-API-Key: ${KEY}" -H "Content-Type: application/json" \\
+  -d '{"external_ref":"sc-alert-12345","device_id":"dev-1","want_livekit":true}'
+# → 201 {"sessionId":"a1b2c3d4", ..., "livekit":{"url":"wss://…","room":"sos-a1b2c3d4-…","token":"&lt;JWT&gt;","expiresAt":1793704196000,"ttlSeconds":900,"identity":"…"}}
+
+# publisher token / renewal (publish-only)
+curl -X POST ${P}/sessions/a1b2c3d4/livekit/publisher -H "X-API-Key: ${KEY}" -H "Content-Type: application/json" -d '{"device_id":"dev-1"}'
+
+# viewer token / renewal (subscribe-only) — operator_id required
+curl -X POST ${P}/sessions/a1b2c3d4/livekit/viewer -H "X-API-Key: ${KEY}" -H "Content-Type: application/json" -d '{"operator_id":"sc-ops-42"}'
+# → {"url","room","token","expiresAt","ttlSeconds","identity"}</pre>
+  <ul class="sm">
+  <li>Renew by calling the same endpoint again; the same <code>device_id</code> / <code>operator_id</code> keeps the same identity (a second connection with the same identity replaces the first — add a tab nonce if needed).</li>
+  <li><code>409 session_ended</code> if the session is no longer active; <code>404 session_not_found</code> for another partner's session.</li>
+  <li>Create with an <code>external_ref</code> whose session has ended → <code>409 session_ended</code> (no new SOS). While active it returns the existing session (<code>duplicate:true</code>, fresh publisher token). Use <code>force_new:true</code> only to deliberately open a new SOS.</li>
+  <li>Ending a session (partner <code>/end</code>, admin, or device) removes all participants, deletes the room, retires the room epoch and refuses new tokens. Old JWTs cannot rejoin when LiveKit has <code>room.auto_create: false</code> and its webhook points to <code>${host}/api/livekit/webhook</code>.</li>
+  </ul></div>
   </div>`;
 }
 
