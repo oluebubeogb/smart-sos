@@ -3,41 +3,131 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>SOS Guard — Admin</title>
+<title>Now Smart SOS — Admin</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
 <style>
-  :root{ --bg:#0f1420; --panel:#182135; --line:#263146; --txt:#e6ecf5; --mut:#8ea0ba; --red:#e5484d; --grn:#36b37e; }
-  *{box-sizing:border-box} body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--txt)}
-  header{display:flex;align-items:center;gap:12px;padding:12px 18px;background:var(--panel);border-bottom:1px solid var(--line)}
-  header h1{font-size:16px;margin:0;font-weight:600} header .sp{flex:1}
-  button{background:#2b3a57;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:13px}
-  button:hover{background:#34466a} button.danger{background:var(--red);border-color:var(--red)} button.go{background:var(--grn);border-color:var(--grn)}
-  .wrap{display:grid;grid-template-columns:320px 1fr;height:calc(100vh - 53px)}
-  .list{border-right:1px solid var(--line);overflow:auto}
-  .item{padding:12px 14px;border-bottom:1px solid var(--line);cursor:pointer}
-  .item:hover{background:#13203a} .item.sel{background:#1b2c4d}
-  .item .t{font-weight:600} .item .s{color:var(--mut);font-size:12px;margin-top:3px}
-  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
-  .dot.on{background:var(--grn)} .dot.off{background:#64748b}
-  .detail{overflow:auto;padding:16px}
-  #map{height:300px;border-radius:10px;border:1px solid var(--line);margin:10px 0}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
-  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  table{width:100%;border-collapse:collapse;font-size:13px} td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
-  .mut{color:var(--mut)} .login{max-width:320px;margin:12vh auto;padding:24px;background:var(--panel);border:1px solid var(--line);border-radius:12px}
-  input{width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid var(--line);background:#0c1322;color:var(--txt)}
-  .badge{font-size:11px;padding:2px 7px;border-radius:999px;background:#2b3a57;color:var(--mut)}
-  footer{position:fixed;bottom:6px;right:10px;color:var(--mut);font-size:11px}
+  :root{
+    --bg:#0b0e14; --bg2:#0e1320; --panel:#121a2a; --panel2:#0f1626;
+    --line:#1e293f; --txt:#eef2f9; --mut:#8898b5; --mut2:#5f6f8c;
+    --accent:#ff4d5e; --accent-soft:rgba(255,77,94,.14); --grn:#35c08a; --chip:#1a2438;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;font-family:"Inter",system-ui,Segoe UI,Roboto,sans-serif;background:
+    radial-gradient(1200px 600px at 80% -10%, #141d30 0%, transparent 60%), var(--bg);
+    color:var(--txt);-webkit-font-smoothing:antialiased}
+  /* ---- login ---- */
+  .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  .login{width:100%;max-width:360px;background:linear-gradient(180deg,var(--panel),var(--panel2));
+    border:1px solid var(--line);border-radius:18px;padding:34px 30px;
+    box-shadow:0 30px 80px -30px rgba(0,0,0,.8)}
+  .brand{display:flex;align-items:center;gap:11px;margin-bottom:4px}
+  .brand .mark{width:34px;height:34px;border-radius:10px;background:
+    linear-gradient(135deg,var(--accent),#b0323f);display:grid;place-items:center;
+    box-shadow:0 0 0 1px rgba(255,77,94,.3),0 8px 20px -8px var(--accent)}
+  .brand .mark span{display:block;width:10px;height:10px;border-radius:50%;background:#fff}
+  .brand h1{font-size:18px;margin:0;font-weight:700;letter-spacing:-.3px}
+  .login .sub{color:var(--mut2);font-size:12px;letter-spacing:.14em;text-transform:uppercase;margin:6px 0 0 45px}
+  .login form{margin-top:22px}
+  .login label{display:block;font-size:12px;color:var(--mut);margin:14px 0 6px}
+  input{width:100%;padding:12px 13px;border-radius:11px;border:1px solid var(--line);
+    background:#0a0f1b;color:var(--txt);font-size:14px;outline:none;transition:border .15s,box-shadow .15s}
+  input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;
+    border:1px solid var(--line);background:var(--chip);color:var(--txt);border-radius:11px;
+    padding:11px 15px;cursor:pointer;font-size:13.5px;font-weight:500;transition:background .15s,border .15s}
+  .btn:hover{background:#1f2c45}
+  .btn.primary{background:linear-gradient(135deg,var(--accent),#d93a49);border-color:transparent;width:100%;margin-top:22px;padding:12px}
+  .btn.primary:hover{filter:brightness(1.07)}
+  .btn.danger{background:transparent;border-color:rgba(255,77,94,.4);color:var(--accent)}
+  .btn.danger:hover{background:var(--accent-soft)}
+  .btn.go{background:linear-gradient(135deg,var(--accent),#d93a49);border-color:transparent}
+  .err{color:var(--accent);font-size:12.5px;margin-top:12px;min-height:16px}
 </style>
 </head>
 <body>
 <div id="app"></div>
-<footer>SOS Guard demo · admin</footer>
 <script>
 const $ = (s,el=document)=>el.querySelector(s);
-let ws, current=null, map, marker, track, room;
+const $$ = (s,el=document)=>[...el.querySelectorAll(s)];
+let ws, current=null, map, marker, track, room, filter="live", search="";
+let sessionsCache = [];
+
+// ---- dashboard CSS injected at runtime ----
+const DASH_CSS = `
+.shell{display:grid;grid-template-columns:300px 1fr;grid-template-rows:auto 1fr auto;height:100vh}
+.topbar{grid-column:1/3;display:flex;align-items:center;gap:12px;padding:12px 18px;
+  background:linear-gradient(180deg,#121a2a,#0e1320);border-bottom:1px solid var(--line)}
+.topbar .mark{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#b0323f);
+  display:grid;place-items:center;box-shadow:0 6px 16px -8px var(--accent)}
+.topbar .mark span{width:8px;height:8px;border-radius:50%;background:#fff}
+.topbar h1{font-size:15px;margin:0;font-weight:700;letter-spacing:-.2px}
+.topbar .sp{flex:1}
+.sidebar{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:#0c121e}
+.segs{display:flex;gap:6px;padding:12px}
+.seg{flex:1;text-align:center;padding:8px;border-radius:9px;font-size:13px;cursor:pointer;color:var(--mut);
+  border:1px solid transparent}
+.seg:hover{background:#111a2b}
+.seg.active{background:var(--chip);color:var(--txt);border-color:var(--line)}
+.seg .n{font-size:11px;color:var(--mut2);margin-left:5px}
+.searchbox{padding:0 12px 10px}
+.searchbox input{padding:9px 11px;font-size:13px}
+.list{overflow:auto;flex:1;min-height:0}
+.item{padding:13px 15px;border-bottom:1px solid var(--line);cursor:pointer;transition:background .12s}
+.item:hover{background:#111a2b}
+.item.sel{background:#15223a;box-shadow:inset 3px 0 0 var(--accent)}
+.item .t{font-weight:600;font-size:14px;display:flex;align-items:center;gap:7px}
+.item .s{color:var(--mut);font-size:12px;margin-top:4px}
+.item .meta{display:flex;align-items:center;gap:8px;margin-top:7px}
+.pill{font-size:10.5px;font-weight:600;letter-spacing:.04em;padding:3px 8px;border-radius:999px;
+  text-transform:uppercase;display:inline-flex;align-items:center;gap:5px}
+.pill.live{background:var(--accent-soft);color:var(--accent)}
+.pill.ended{background:#19202f;color:var(--mut)}
+.pulse{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 0 var(--accent);
+  animation:pulse 1.6s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,77,94,.5)}70%{box-shadow:0 0 0 7px rgba(255,77,94,0)}100%{box-shadow:0 0 0 0 rgba(255,77,94,0)}}
+.ico{color:var(--mut2);font-size:12px;display:inline-flex;gap:3px;align-items:center}
+.detail{overflow:auto;padding:20px 22px;min-height:0}
+.empty{display:grid;place-items:center;height:100%;color:var(--mut2);text-align:center}
+.dhead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.dhead h2{margin:0;font-size:20px;font-weight:700;letter-spacing:-.3px}
+.dhead .id{color:var(--mut2);font-size:13px;font-weight:500}
+.actions{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap}
+.card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
+  border-radius:14px;padding:16px;margin-bottom:14px}
+.card h3{margin:0 0 12px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+.kv:last-child{border-bottom:0}
+.kv .k{color:var(--mut)}
+.kv .v{color:var(--txt);font-weight:500;text-align:right}
+#map{height:280px;border-radius:12px;border:1px solid var(--line);overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}
+th{color:var(--mut);font-weight:500;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em}
+.mut{color:var(--mut)}
+audio{width:100%;margin-top:8px;filter:saturate(.9)}
+.audio-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:13px}
+.audio-row .nm{color:var(--mut);min-width:140px}
+.footer{grid-column:1/3;padding:9px 18px;border-top:1px solid var(--line);color:var(--mut2);
+  font-size:11.5px;background:#0c121e;display:flex;align-items:center;gap:7px}
+.foot-dot{width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:.7}
+.src{font-size:10.5px;padding:2px 7px;border-radius:6px;background:#19202f;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+.timeline{list-style:none;margin:0;padding:0}
+.timeline li{position:relative;padding:0 0 12px 18px;font-size:13px;color:var(--mut)}
+.timeline li:before{content:"";position:absolute;left:3px;top:4px;width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.timeline li:after{content:"";position:absolute;left:6px;top:11px;bottom:0;width:1px;background:var(--line)}
+.timeline li:last-child:after{display:none}
+.timeline li b{color:var(--txt);font-weight:500}
+`;
+
+function injectCSS(){
+  if($("#dash-css")) return;
+  const st=document.createElement("style"); st.id="dash-css"; st.textContent=DASH_CSS;
+  document.head.appendChild(st);
+}
 
 async function api(path, opts={}){
   const r = await fetch(path, {credentials:"same-origin", headers:{"Content-Type":"application/json"}, ...opts});
@@ -47,41 +137,92 @@ async function api(path, opts={}){
 
 function renderLogin(msg){
   document.getElementById("app").innerHTML = `
-  <div class="login">
-    <h2>SOS Guard — Admin</h2>
-    <p class="mut">Demo login: admin / admin</p>
-    <input id="u" placeholder="username" value="admin"/>
-    <input id="p" type="password" placeholder="password" value="admin"/>
-    <button class="go" style="width:100%;margin-top:8px" onclick="doLogin()">Sign in</button>
-    <p style="color:#e5484d">${msg||""}</p>
-  </div>`;
+  <div class="login-wrap"><div class="login">
+    <div class="brand">
+      <div class="mark"><span></span></div>
+      <div><h1>Now Smart SOS</h1></div>
+    </div>
+    <div class="sub">Admin Console</div>
+    <form onsubmit="doLogin(event)">
+      <label>Username</label>
+      <input id="u" autocomplete="username" autofocus />
+      <label>Password</label>
+      <input id="p" type="password" autocomplete="current-password" />
+      <button class="btn primary" type="submit">Sign in</button>
+      <div class="err">${msg||""}</div>
+    </form>
+  </div></div>`;
 }
-window.doLogin = async ()=>{
+window.doLogin = async (e)=>{
+  if(e) e.preventDefault();
   const r = await fetch("/api/login",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({username:$("#u").value,password:$("#p").value})});
   if(r.ok) start(); else renderLogin("Invalid credentials");
 };
-
-function renderApp(){
-  document.getElementById("app").innerHTML = `
-  <header><h1>🛡️ SOS Guard</h1><span class="badge">LIVE</span><div class="sp"></div>
-    <button onclick="logout()">Log out</button></header>
-  <div class="wrap">
-    <div class="list" id="list"></div>
-    <div class="detail" id="detail"><p class="mut">Select an alert to open the live session.</p></div>
-  </div>`;
-}
 window.logout = async ()=>{ await fetch("/api/logout",{method:"POST",credentials:"same-origin"}); location.reload(); };
 
-let sessionsCache = [];
+function renderApp(){
+  injectCSS();
+  document.getElementById("app").innerHTML = `
+  <div class="shell">
+    <div class="topbar">
+      <div class="mark"><span></span></div>
+      <h1>Now Smart SOS</h1>
+      <div class="sp"></div>
+      <button class="btn" onclick="logout()">Log out</button>
+    </div>
+    <div class="sidebar">
+      <div class="segs">
+        <div class="seg ${filter==='live'?'active':''}" onclick="setFilter('live')">Live<span class="n" id="n-live"></span></div>
+        <div class="seg ${filter==='history'?'active':''}" onclick="setFilter('history')">History<span class="n" id="n-hist"></span></div>
+      </div>
+      <div class="searchbox"><input id="search" placeholder="Search name, id, device…" oninput="onSearch(this.value)" /></div>
+      <div class="list" id="list"></div>
+    </div>
+    <div class="detail" id="detail"><div class="empty"><div>Select an alert to view its session.</div></div></div>
+    <div class="footer"><span class="foot-dot"></span>Now Smart SOS · admin</div>
+  </div>`;
+  if(search) $("#search").value = search;
+  renderList();
+}
+
+window.setFilter = (f)=>{ filter=f; $$(".seg").forEach(s=>s.classList.remove("active"));
+  renderApp(); };
+window.onSearch = (v)=>{ search=v.trim().toLowerCase(); renderList(); };
+
+function fmtDur(ms){
+  if(ms==null) return "—";
+  const s=Math.round(ms/1000); const m=Math.floor(s/60); const r=s%60;
+  return m?`${m}m ${r}s`:`${r}s`;
+}
+function matchesSearch(s){
+  if(!search) return true;
+  return (s.decoyName+" "+s.id+" "+s.deviceId+" "+(s.source||"")).toLowerCase().includes(search);
+}
+function visibleSessions(){
+  return sessionsCache
+    .filter(s=> filter==='live' ? s.active : !s.active)
+    .filter(matchesSearch)
+    .sort((a,b)=> (b.active-a.active) || (b.createdAt-a.createdAt));
+}
+
 function renderList(){
-  const el = $("#list");
-  if(!sessionsCache.length){ el.innerHTML = `<p class="mut" style="padding:14px">No alerts yet. Trigger SOS from the device.</p>`; return; }
-  el.innerHTML = sessionsCache.sort((a,b)=>b.createdAt-a.createdAt).map(s=>`
+  const liveN = sessionsCache.filter(s=>s.active).length;
+  const histN = sessionsCache.filter(s=>!s.active).length;
+  const nl=$("#n-live"), nh=$("#n-hist"); if(nl) nl.textContent=liveN?`(${liveN})`:""; if(nh) nh.textContent=histN?`(${histN})`:"";
+  const el = $("#list"); if(!el) return;
+  const rows = visibleSessions();
+  if(!rows.length){ el.innerHTML = `<p class="mut" style="padding:16px;font-size:13px">${filter==='live'?'No active alerts.':'No past alerts.'}</p>`; return; }
+  el.innerHTML = rows.map(s=>`
     <div class="item ${current===s.id?'sel':''}" onclick="openSession('${s.id}')">
-      <div class="t"><span class="dot ${s.active?'on':'off'}"></span>${s.decoyName} · ${s.id}</div>
-      <div class="s">${new Date(s.createdAt).toLocaleString()} · ${s.status}</div>
-      <div class="s">device ${s.deviceId} · nearby ${s.nearbyCount}</div>
+      <div class="t">${s.decoyName} <span class="id" style="color:var(--mut2);font-weight:500;font-size:12px">· ${s.id}</span></div>
+      <div class="s">${new Date(s.createdAt).toLocaleString()}</div>
+      <div class="meta">
+        <span class="pill ${s.active?'live':'ended'}">${s.active?'<span class=pulse></span>Live':'Ended'}</span>
+        <span class="ico">◉ ${s.nearbyCount}</span>
+        ${s.hasAudio?'<span class="ico">♪ rec</span>':''}
+        <span class="src">${s.source||'?'}</span>
+      </div>
     </div>`).join("");
 }
 
@@ -90,23 +231,49 @@ window.openSession = async (id)=>{
   const s = await api(`/api/session/${id}`);
   const d = $("#detail");
   d.innerHTML = `
-    <div class="row"><h2 style="margin:0">${s.decoyName} · ${s.id}</h2>
-      <span class="badge">${s.active?'ACTIVE':'ENDED'}</span><div class="sp" style="flex:1"></div>
-      <button class="go" id="listenBtn" onclick="startListen('${id}')">🎧 Listen live</button>
-      <button class="danger" onclick="endSession('${id}')">⏹ End session</button>
+    <div class="dhead">
+      <h2>${s.decoyName}</h2><span class="id">· ${s.id}</span>
+      <span class="pill ${s.active?'live':'ended'}">${s.active?'<span class=pulse></span>Live':'Ended'}</span>
+      <div class="actions">
+        ${s.active?`<button class="btn go" id="listenBtn" onclick="startListen('${id}')">Listen live</button>`:''}
+        ${s.active?`<button class="btn danger" onclick="endSession('${id}')">End session</button>`:''}
+      </div>
     </div>
-    <div class="card"><b>Last location:</b> <span id="loc">${fmtLoc(s.lastLocation)}</span></div>
-    <div id="map"></div>
-    <div class="card"><b>Nearby devices (${s.nearby.length}/25)</b>
+    <div class="grid2">
+      <div class="card"><h3>Session</h3>
+        <div class="kv"><span class="k">Status</span><span class="v">${s.status}</span></div>
+        <div class="kv"><span class="k">Source</span><span class="v">${(s.source||'unknown').toUpperCase()}</span></div>
+        <div class="kv"><span class="k">Device</span><span class="v">${s.deviceId}</span></div>
+        <div class="kv"><span class="k">Started</span><span class="v">${new Date(s.createdAt).toLocaleString()}</span></div>
+        <div class="kv"><span class="k">Ended</span><span class="v">${s.endedAt?new Date(s.endedAt).toLocaleString():'—'}</span></div>
+        <div class="kv"><span class="k">Duration</span><span class="v">${fmtDur(s.duration)}</span></div>
+        <div class="kv"><span class="k">Last location</span><span class="v" id="loc">${fmtLoc(s.lastLocation)}</span></div>
+      </div>
+      <div class="card"><h3>Timeline</h3>
+        <ul class="timeline">
+          <li><b>SOS triggered</b><br>${new Date(s.createdAt).toLocaleString()}</li>
+          ${s.locations&&s.locations.length?`<li><b>${s.locations.length}</b> location point(s)</li>`:''}
+          ${s.hasAudio?`<li><b>Audio recorded</b> · ${(s.audioFiles||[]).length} file(s)</li>`:''}
+          ${s.endedAt?`<li><b>${s.status}</b><br>${new Date(s.endedAt).toLocaleString()}</li>`:'<li class="mut">Session active…</li>'}
+        </ul>
+      </div>
+    </div>
+    <div class="card"><h3>Location trail</h3><div id="map"></div></div>
+    <div class="card"><h3>Nearby devices (${(s.nearby||[]).length}/25)</h3>
       <table id="nearby"><thead><tr><th>Name</th><th>Address</th><th>Type</th><th>RSSI</th></tr></thead>
       <tbody>${nearbyRows(s.nearby)}</tbody></table>
     </div>
-    <audio id="audio" autoplay></audio>`;
+    <div class="card"><h3>Saved recording${s.hasAudio?'':' — none'}</h3>
+      <div id="audioList" class="mut" style="font-size:13px">${s.hasAudio?'Loading…':'No audio uploaded for this session.'}</div>
+      <audio id="liveAudio" autoplay style="display:none"></audio>
+    </div>`;
   setupMap(s);
+  if(s.hasAudio) loadAudio(id);
 };
 
 function fmtLoc(l){ return l ? `${l.lat.toFixed(5)}, ${l.lng.toFixed(5)} (±${l.acc??'?'}m)` : "—"; }
 function nearbyRows(list){
+  list = list||[];
   if(!list.length) return `<tr><td colspan="4" class="mut">none reported</td></tr>`;
   return list.map(d=>`<tr><td>${d.name||'(unknown)'}</td><td>${d.address||d.mac||''}</td><td>${d.type||'BT'}</td><td>${d.rssi??''}</td></tr>`).join("");
 }
@@ -116,7 +283,22 @@ function setupMap(s){
   map = L.map("map").setView([l.lat,l.lng], s.lastLocation?15:3);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
   marker = L.marker([l.lat,l.lng]).addTo(map);
-  if(s.locations?.length){ track = L.polyline(s.locations.map(p=>[p.lat,p.lng]),{color:'#e5484d'}).addTo(map); }
+  if(s.locations&&s.locations.length){ track = L.polyline(s.locations.map(p=>[p.lat,p.lng]),{color:'#ff4d5e',weight:3}).addTo(map); }
+}
+
+async function loadAudio(id){
+  try{
+    const {files} = await api(`/api/session/${id}/audio`);
+    const box = $("#audioList"); if(!box) return;
+    if(!files || !files.length){ box.innerHTML = '<span class="mut">No audio files.</span>'; return; }
+    const rec = files.find(f=>f.name.startsWith("recording"));
+    const ordered = rec ? [rec, ...files.filter(f=>f!==rec)] : files;
+    box.innerHTML = ordered.map(f=>`
+      <div class="audio-row">
+        <span class="nm">${f.name.startsWith("recording")?"Full recording":f.name}</span>
+        <audio controls preload="none" src="${f.url}"></audio>
+      </div>`).join("");
+  }catch(e){ const box=$("#audioList"); if(box) box.innerHTML='<span class="mut">Could not load audio.</span>'; }
 }
 
 window.startListen = async (id)=>{
@@ -125,9 +307,9 @@ window.startListen = async (id)=>{
     room = new LivekitClient.Room();
     await room.connect(livekitUrl, token);
     room.on(LivekitClient.RoomEvent.TrackSubscribed,(trk)=>{
-      if(trk.kind==='audio'){ const a=$("#audio"); a.srcObject=new MediaStream([trk.mediaStreamTrack]); a.play(); }
+      if(trk.kind==='audio'){ const a=$("#liveAudio"); a.style.display="block"; a.srcObject=new MediaStream([trk.mediaStreamTrack]); a.play(); }
     });
-    $("#listenBtn").textContent = "🔊 Listening…";
+    const b=$("#listenBtn"); if(b) b.textContent = "Listening…";
   }catch(e){ alert("LiveKit connect failed: "+e.message+"\nCheck LIVEKIT_URL / keys."); }
 };
 window.endSession = async (id)=>{
@@ -141,10 +323,11 @@ function connectWS(){
   ws.onmessage = (ev)=>{
     const m = JSON.parse(ev.data);
     if(m.type==="hello"){ sessionsCache=m.sessions; renderList(); }
-    else if(m.type==="alert"){ upsert(m.session); renderList(); if(Notification.permission==="granted") new Notification("🚨 SOS",{body:m.session.decoyName}); }
+    else if(m.type==="alert"){ upsert(m.session); renderList(); if(Notification.permission==="granted") new Notification("SOS — Now Smart SOS",{body:m.session.decoyName}); }
     else if(m.type==="location" && m.sessionId===current){ const el=$("#loc"); if(el) el.textContent=fmtLoc(m.point); if(marker){marker.setLatLng([m.point.lat,m.point.lng]); map.setView([m.point.lat,m.point.lng]); if(track) track.addLatLng([m.point.lat,m.point.lng]);} }
     else if(m.type==="nearby" && m.sessionId===current){ const t=$("#nearby tbody"); if(t) t.innerHTML=nearbyRows(m.devices); }
-    else if(m.type==="ended"){ const s=sessionsCache.find(x=>x.id===m.sessionId); if(s){s.active=false;s.status="ended";} renderList(); }
+    else if(m.type==="audio"){ const s=sessionsCache.find(x=>x.id===m.sessionId); if(s){s.hasAudio=true;} if(m.sessionId===current) loadAudio(current); renderList(); }
+    else if(m.type==="ended"){ if(m.session) upsert(m.session); else{ const s=sessionsCache.find(x=>x.id===m.sessionId); if(s){s.active=false;s.status="ended";} } renderList(); if(m.sessionId===current) openSession(current); }
   };
   ws.onclose = ()=> setTimeout(connectWS, 2000);
 }

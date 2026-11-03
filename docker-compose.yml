@@ -1,13 +1,15 @@
-# Coolify-friendly compose for the SOS Guard admin backend.
+# Coolify-friendly compose for the Now Smart SOS admin backend.
 # In Coolify: create a "Docker Compose" resource, point at this file,
-# set the env vars (see .env.example), attach to the same network as LiveKit
-# if you want internal addressing. Exposes 8080 (map a domain in Coolify).
+# set the env vars (see .env.example), attach a persistent volume for /data,
+# and map a domain. PORT inside the container must match the published port
+# Coolify/proxy routes to (set PORT=7474 and "7474:7474" if you change it).
 services:
   sos-guard-server:
     build: .
     restart: unless-stopped
     environment:
-      PORT: 7474
+      PORT: ${PORT:-8080}
+      DATA_DIR: /data
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       SESSION_SECRET: ${SESSION_SECRET:-change-me-demo-secret}
@@ -15,4 +17,8 @@ services:
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-secret}
     ports:
-      - "7474:7474"
+      - "${PORT:-8080}:${PORT:-8080}"
+    volumes:
+      - sos-data:/data
+volumes:
+  sos-data:
