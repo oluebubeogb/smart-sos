@@ -8,7 +8,7 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      PORT: ${PORT:-8080}
+      PORT: ${PORT:-7474}
       DATA_DIR: /data
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
@@ -17,7 +17,7 @@ services:
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-secret}
     ports:
-      - "${PORT:-8080}:${PORT:-8080}"
+      - "${PORT:-7474}:${PORT:-7474}"
     volumes:
       - sos-data:/data
 volumes:
