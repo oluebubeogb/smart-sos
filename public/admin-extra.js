@@ -16,17 +16,36 @@ window.ssosLoadMe = async()=>{
   SSOS.me = await r.json(); return SSOS.me; };
 const isSuper=()=>SSOS.me&&SSOS.me.role==="super";
 
+const ic=(d)=>`<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const ICONS={
+  live:ic('<circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M6.3 6.3a8 8 0 0 0 0 11.4M17.7 6.3a8 8 0 0 1 0 11.4"/>'),
+  history:ic('<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>'),
+  keys:ic('<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3M17 6l3 3M15 8l2 2"/>'),
+  docs:ic('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>'),
+  admins:ic('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M21.5 20a6.5 6.5 0 0 0-4-6"/>'),
+  account:ic('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
+  trash:ic('<path d="M3 6h18M8 6V4h8v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14M10 11v6M14 11v6"/>'),
+  collapse:ic('<path d="M15 6l-6 6 6 6"/>'),
+};
+window.SSOS.collapsed = (()=>{ try{ return localStorage.getItem("ssos_sidebar_collapsed")==="1"; }catch{ return false; } })();
+window.toggleSidebar = ()=>{ SSOS.collapsed=!SSOS.collapsed; try{ localStorage.setItem("ssos_sidebar_collapsed",SSOS.collapsed?"1":"0"); }catch{} window.__rerender(); };
+const nvItem=(on,click,icon,label,extra="")=>`<div class="nv ${on?'on':''}" onclick="${click}" title="${label.replace(/&amp;/g,'&')}"><span class="ni">${ICONS[icon]}</span><span class="nl">${label}</span>${extra}</div>`;
 window.ssosNav = ()=>`
+  <div class="sbtop">
+    <img class="sbicon" src="/icon.png" alt="Smart SOS" title="Smart SOS">
+    <button class="sbtog" onclick="toggleSidebar()" title="${SSOS.collapsed?'Expand sidebar':'Collapse sidebar'}">${ICONS.collapse}</button>
+  </div>
   <nav class="nav">
-    <div class="nv ${SSOS.page==='sessions'&&window.__filter()==='live'?'on':''}" onclick="goSessions('live')">● Live<span class="n" id="n-live"></span></div>
-    <div class="nv ${SSOS.page==='sessions'&&window.__filter()==='history'?'on':''}" onclick="goSessions('history')">◷ History<span class="n" id="n-hist"></span></div>
-    <div class="nv ${SSOS.page==='keys'?'on':''}" onclick="goPage('keys')">⚿ Partners &amp; Keys</div>
-    <div class="nv ${SSOS.page==='docs'?'on':''}" onclick="goPage('docs')">❐ Docs</div>
-    ${isSuper()?`<div class="nv ${SSOS.page==='admins'?'on':''}" onclick="goPage('admins')">☰ Admins</div>`:''}
-    <div class="nv ${SSOS.page==='account'?'on':''}" onclick="goPage('account')">◉ Account</div>
+    ${nvItem(SSOS.page==='sessions'&&window.__filter()==='live',"goSessions('live')","live","Live",'<span class="n" id="n-live"></span>')}
+    ${nvItem(SSOS.page==='sessions'&&window.__filter()==='history',"goSessions('history')","history","History",'<span class="n" id="n-hist"></span>')}
+    ${nvItem(SSOS.page==='keys',"goPage('keys')","keys","Partners &amp; Keys")}
+    ${nvItem(SSOS.page==='docs',"goPage('docs')","docs","Docs")}
+    ${isSuper()?nvItem(SSOS.page==='admins',"goPage('admins')","admins","Admins"):''}
+    ${nvItem(SSOS.page==='account',"goPage('account')","account","Account")}
+    ${nvItem(SSOS.page==='trash',"goPage('trash')","trash","Trash")}
   </nav>`;
 window.goPage = (p)=>{ SSOS.page=p; window.__rerender(); };
-window.goSessions = (f)=>{ SSOS.page="sessions"; window.setFilter(f); };
+window.goSessions = (f)=>{ SSOS.page="sessions"; if(SSOS.collapsed){ SSOS.collapsed=false; try{ localStorage.setItem("ssos_sidebar_collapsed","0"); }catch{} } window.setFilter(f); };
 
 function modal(html){
   closeModal();
@@ -61,8 +80,19 @@ async function renderKeys(el){
   $("#actBody").innerHTML=actTable(activity,true);
 }
 const actTable=(a,org)=>!a.length?`<div class="emptybox">No partner API calls yet.</div>`:`<table class="tbl"><thead><tr><th>Time</th>${org?'<th>Org</th>':''}<th>Call</th><th>Session</th><th>Status</th><th>IP</th></tr></thead><tbody>
-  ${a.map(r=>`<tr><td class="sm">${new Date(r.ts).toLocaleString()}</td>${org?`<td>${esc(r.org_name)}</td>`:''}<td><code>${esc(r.method)} ${esc(r.endpoint)}</code></td><td class="sm">${esc(r.session_id||'')}</td><td><span class="pill ${r.status<400?"ok":"bad"}">${r.status}</span></td><td class="sm mut">${esc(r.ip||'')}</td></tr>`).join("")}</tbody></table>`;
+  ${a.map(r=>`<tr><td class="sm">${new Date(r.ts).toLocaleString()}</td>${org?`<td>${esc(r.org_name)}</td>`:''}<td><code>${esc(r.method)} ${esc(r.endpoint)}</code></td><td class="sm">${esc(r.session_id||'')}</td><td><span class="pill ${r.status<400?"ok":"bad"}">${r.status}</span>${r.status>=400?`<div class="hint">${esc(r.detail||actHint(r))}</div>`:''}</td><td class="sm mut">${esc(r.ip||'')}</td></tr>`).join("")}</tbody></table>`;
 
+// Fallback hint for older rows logged before error detail was stored.
+function actHint(r){
+  const sid=r.session_id;
+  if(r.status===404) return sid?`Session not found — no SOS with id/ref "${sid}" for this key.`:"Not found — check the URL path.";
+  if(r.status===401) return "Not authorised — API key missing, invalid or disabled.";
+  if(r.status===403) return "Forbidden — wrong credential type or origin.";
+  if(r.status===409) return "Conflict — this SOS has already ended.";
+  if(r.status===400) return "Bad request — a required field is missing or invalid.";
+  if(r.status===413) return "Request body too large.";
+  return r.status>=500?"Server error.":"Request rejected.";
+}
 window.newKey=()=>modal(`<h3>New partner key</h3>
   <label>Organisation name</label><input id="kOrg" placeholder="e.g. SafeCorps">
   <label>Webhook URL <span class="mut">(optional, https)</span></label><input id="kHook" placeholder="https://partner.example.com/smart-sos/webhook">
@@ -85,7 +115,7 @@ window.manageKey=async(id)=>{
     <label>Allowed origins (display feed)</label><input id="mOrig" value="${esc((k.allowedOrigins||[]).join(', '))}">
     <label class="chk"><input type="checkbox" id="mEn" ${k.enabled?'checked':''}> Enabled</label>
     <div class="row"><button class="btn primary" onclick="saveKey('${id}')">Save</button><button class="btn" onclick="revealKey('${id}')">Reveal secrets</button><button class="btn" onclick="testHook('${id}')">Send test webhook</button><button class="btn" onclick="keyActivity('${id}')">Activity</button></div>
-    <div class="row"><button class="btn warn" onclick="rotate('${id}','api')">Rotate API key</button><button class="btn warn" onclick="rotate('${id}','read')">Rotate read token</button><button class="btn warn" onclick="rotate('${id}','webhook')">Rotate webhook secret</button><div class="sp"></div><button class="btn danger" onclick="revokeKey('${id}')">Revoke</button></div>
+    <div class="row"><button class="btn warn" onclick="rotate('${id}','api')">Rotate API key</button><button class="btn warn" onclick="rotate('${id}','read')">Rotate read token</button><button class="btn warn" onclick="rotate('${id}','webhook')">Rotate webhook secret</button><div class="sp"></div><button class="btn danger" onclick="revokeKey('${id}')">Move to trash</button></div>
     <div class="err" id="mErr"></div><div id="mOut"></div>`);
 };
 window.saveKey=async(id)=>{ try{ await j(`/api/keys/${id}`,{method:"PATCH",body:JSON.stringify({orgName:$("#mOrg").value,webhookUrl:$("#mHook").value,allowedOrigins:$("#mOrig").value,enabled:$("#mEn").checked})}); closeModal(); goPage('keys'); }catch(e){ $("#mErr").textContent=e.message; } };
@@ -99,25 +129,40 @@ window.rotate=async(id,what)=>{
     $("#mOut").innerHTML=secretRow("New "+({api:"API key",read:"read token",webhook:"webhook secret"})[what],d.apiKey||d.readToken||d.webhookSecret); refreshKeysQuiet(); }catch(e){ $("#mErr").textContent=e.message; }
 };
 async function refreshKeysQuiet(){ try{ window.__keys=(await j("/api/keys")).keys; }catch{} }
-window.revokeKey=async(id)=>{ if(!confirm("Revoke this key permanently? Partner calls with it will fail. Session history is kept.")) return; await j(`/api/keys/${id}`,{method:"DELETE"}); closeModal(); goPage('keys'); };
+window.revokeKey=async(id)=>{ if(!confirm("Move this key to trash? Partner calls with it stop working until you restore it from Trash. Session history is kept.")) return; await j(`/api/keys/${id}`,{method:"DELETE"}); closeModal(); goPage('keys'); };
 
 // ---------------- Admins (super) ----------------
 async function renderAdmins(el){
   el.innerHTML=`<div class="page"><div class="ph"><h2>Admins</h2><div class="sp"></div><button class="btn primary" onclick="newAdmin()">+ New admin</button></div><div id="admBody" class="mut">Loading…</div></div>`;
   const {admins}=await j("/api/admins");
   $("#admBody").innerHTML=`<table class="tbl"><thead><tr><th>Username</th><th>Email</th><th>Keys</th><th>Created</th><th>Status</th><th></th></tr></thead><tbody>
-    <tr><td><b>${esc(SSOS.me.username)}</b> <span class="pill live">superadmin</span></td><td class="mut">from environment</td><td>—</td><td>—</td><td>—</td><td></td></tr>
+    <tr><td><b>${esc(SSOS.me.username)}</b> <span class="pill live">superadmin</span></td><td class="mut">—</td><td>—</td><td>—</td><td>—</td><td></td></tr>
     ${admins.map(a=>`<tr><td><b>${esc(a.username)}</b></td><td>${esc(a.email)}</td><td>${a.keyCount}</td><td class="sm">${new Date(a.createdAt).toLocaleDateString()}</td>
     <td>${a.disabled?'<span class="pill ended">Disabled</span>':'<span class="pill ok">Active</span>'}</td>
-    <td class="acts"><button class="btn sm" onclick="resetPw('${a.id}','${esc(a.username)}')">Reset password</button><button class="btn sm" onclick="toggleAdmin('${a.id}',${!a.disabled})">${a.disabled?'Enable':'Disable'}</button><button class="btn sm danger" onclick="delAdmin('${a.id}','${esc(a.username)}')">Delete</button></td></tr>`).join("")}</tbody></table>
-    <p class="mut sm">Admins see only their own keys, sessions and activity. Deleting an admin moves their keys and sessions to the superadmin.</p>`;
+    <td class="acts"><button class="btn sm" onclick="resetPw('${a.id}','${esc(a.username)}')">Reset password</button><button class="btn sm" onclick="toggleAdmin('${a.id}',${!a.disabled})">${a.disabled?'Enable':'Disable'}</button><button class="btn sm danger" onclick="delAdmin('${a.id}','${esc(a.username)}')">Move to trash</button></td></tr>`).join("")}</tbody></table>
+    <p class="mut sm">Admins see only their own keys, sessions and activity. Trashing an admin signs them out and moves their keys and sessions to the superadmin; restoring from Trash hands them back.</p>`;
 }
 window.newAdmin=()=>modal(`<h3>New admin</h3><label>Username</label><input id="aU" autocomplete="off"><label>Email</label><input id="aE" type="email"><label>Password (min 8)</label><input id="aP" type="password" autocomplete="new-password"><div class="err" id="aErr"></div><button class="btn primary" onclick="createAdmin()">Create admin</button>`);
 window.createAdmin=async()=>{ try{ await j("/api/admins",{method:"POST",body:JSON.stringify({username:$("#aU").value,email:$("#aE").value,password:$("#aP").value})}); closeModal(); goPage('admins'); }catch(e){ $("#aErr").textContent=e.message; } };
 window.resetPw=(id,u)=>modal(`<h3>Reset password — ${u}</h3><label>New password (min 8)</label><input id="rP" type="password" autocomplete="new-password"><div class="err" id="rErr"></div><button class="btn primary" onclick="doReset('${id}')">Reset</button><p class="mut sm">Their existing sessions are signed out.</p>`);
 window.doReset=async(id)=>{ try{ await j(`/api/admins/${id}/password`,{method:"POST",body:JSON.stringify({password:$("#rP").value})}); closeModal(); }catch(e){ $("#rErr").textContent=e.message; } };
 window.toggleAdmin=async(id,dis)=>{ await j(`/api/admins/${id}`,{method:"PATCH",body:JSON.stringify({disabled:dis})}); goPage('admins'); };
-window.delAdmin=async(id,u)=>{ if(!confirm(`Delete admin ${u}? Their keys and sessions move to the superadmin.`)) return; await j(`/api/admins/${id}`,{method:"DELETE"}); goPage('admins'); };
+window.delAdmin=async(id,u)=>{ if(!confirm(`Move admin ${u} to trash? They are signed out and their keys and sessions move to the superadmin until restored.`)) return; await j(`/api/admins/${id}`,{method:"DELETE"}); goPage('admins'); };
+
+// ---------------- Trash ----------------
+async function renderTrash(el){
+  el.innerHTML=`<div class="page"><div class="ph"><h2>Trash</h2></div><div id="trBody" class="mut">Loading…</div></div>`;
+  const {items}=await j("/api/trash");
+  $("#trBody").innerHTML=!items.length?`<div class="emptybox">Trash is empty. Deleted keys${isSuper()?' and admins':''} land here and can be restored.</div>`:`
+  <table class="tbl"><thead><tr><th>Item</th><th>Type</th><th>Deleted</th><th>Note</th><th></th></tr></thead><tbody>
+  ${items.map(i=>`<tr><td><b>${esc(i.name)}</b><div class="mut sm">${esc(i.sub||'')}</div></td>
+    <td><span class="pill ${i.type==='key'?'ok':'live'}">${i.type==='key'?'Partner key':'Admin'}</span></td>
+    <td class="sm">${new Date(i.deletedAt).toLocaleString()}</td>
+    <td class="sm mut">${i.type==='key'?(i.wasEnabled?'Restores enabled':'Restores disabled'):`${i.movedKeys} key(s), ${i.movedSessions} session(s) returned on restore`}</td>
+    <td class="acts"><button class="btn sm" onclick="restoreItem('${i.type}','${i.id}',this)">Restore</button></td></tr>`).join("")}</tbody></table>
+  <p class="mut sm">Restored keys work again immediately with the same secrets.</p>`;
+}
+window.restoreItem=async(type,id,btn)=>{ btn.disabled=true; try{ await j(`/api/trash/${type}/${id}/restore`,{method:"POST"}); goPage('trash'); }catch(e){ btn.disabled=false; alert(e.message); } };
 
 // ---------------- Account ----------------
 function renderAccount(el){
@@ -126,8 +171,7 @@ function renderAccount(el){
     <div class="card"><div class="kv"><span class="k">Username</span><span class="v">${esc(me.username)}</span></div>
     <div class="kv"><span class="k">Email</span><span class="v">${esc(me.email||'—')}</span></div>
     <div class="kv"><span class="k">Role</span><span class="v">${isSuper()?'Superadmin':'Admin'}</span></div></div>
-    ${isSuper()?`<div class="card"><h3>Password</h3><p class="mut sm">The superadmin account comes from <code>ADMIN_USER</code> / <code>ADMIN_PASSWORD</code>. Change it in your deployment environment (Coolify) and redeploy.</p></div>`:
-    `<div class="card"><h3>Change password</h3><label>Current password</label><input id="cP" type="password" autocomplete="current-password"><label>New password (min 8)</label><input id="nP" type="password" autocomplete="new-password"><label>Confirm new password</label><input id="nP2" type="password" autocomplete="new-password"><div class="err" id="cErr"></div><button class="btn primary" onclick="changePw()">Update password</button></div>`}
+    ${isSuper()?'':`<div class="card"><h3>Change password</h3><label>Current password</label><input id="cP" type="password" autocomplete="current-password"><label>New password (min 8)</label><input id="nP" type="password" autocomplete="new-password"><label>Confirm new password</label><input id="nP2" type="password" autocomplete="new-password"><div class="err" id="cErr"></div><button class="btn primary" onclick="changePw()">Update password</button></div>`}
   </div>`;
 }
 window.changePw=async()=>{ if($("#nP").value!==$("#nP2").value){ $("#cErr").textContent="Passwords don't match"; return; }
@@ -206,6 +250,7 @@ window.ssosRenderPage = async(el)=>{
     else if(SSOS.page==="admins" && isSuper()) await renderAdmins(el);
     else if(SSOS.page==="account") renderAccount(el);
     else if(SSOS.page==="docs") await renderDocs(el);
+    else if(SSOS.page==="trash") await renderTrash(el);
   }catch(e){ el.innerHTML=`<div class="page"><div class="err">${esc(e.message)}</div></div>`; }
 };
 
@@ -214,6 +259,20 @@ const css=document.createElement("style"); css.textContent=`
 .nv{padding:9px 12px;border-radius:9px;cursor:pointer;color:#a9b1c3;font-size:13.5px;font-weight:500;display:flex;align-items:center;gap:6px}
 .nv:hover{background:rgba(255,255,255,.04);color:#e8ecf4}.nv.on{background:rgba(255,77,79,.12);color:#fff;box-shadow:inset 2px 0 0 #ff4d4f}
 .nv .n{margin-left:auto;font-size:11.5px;color:#8a93a6}
+.nv .ni{display:grid;place-items:center;width:20px;flex:0 0 20px;opacity:.9}.nv.on .ni{color:#ff6b78}
+.sbtop{display:flex;align-items:center;gap:8px;padding:12px 12px 4px}.sbicon{width:30px;height:30px;border-radius:9px;background:#fff;padding:3px;display:none}
+.sbtog{margin-left:auto;width:28px;height:28px;border-radius:8px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);color:#a9b1c3;display:grid;place-items:center;cursor:pointer;transition:transform .2s,background .15s}
+.sbtog:hover{background:rgba(255,77,94,.14);color:#fff}
+.hint{margin-top:4px;font-size:11.5px;color:#8a93a6;line-height:1.35;max-width:320px}
+.shell{transition:grid-template-columns .2s ease}
+.shell.collapsed{grid-template-columns:68px 1fr!important}
+.shell.collapsed .sidebar{background:linear-gradient(180deg,rgba(232,45,63,.16),rgba(232,45,63,.04) 45%,#0c121e)}
+.shell.collapsed .sbtop{flex-direction:column;padding:12px 0 6px}.shell.collapsed .sbicon{display:block}.shell.collapsed .sbtog{margin:0;transform:rotate(180deg)}
+.shell.collapsed .nav{align-items:center;padding:8px 0;border-bottom:0;gap:6px}
+.shell.collapsed .nv{width:44px;height:44px;padding:0;justify-content:center;border-radius:12px}
+.shell.collapsed .nv .nl,.shell.collapsed .nv .n{display:none}
+.shell.collapsed .nv.on{background:rgba(232,45,63,.22);box-shadow:0 0 0 1px rgba(232,45,63,.35),0 6px 16px -8px #e82d3f}
+.shell.collapsed .searchbox,.shell.collapsed .list{display:none!important}
 .page{padding:24px 28px;max-width:1150px}.page.narrow{max-width:560px}.page h2{margin:0 0 14px;font-size:20px}.ph{display:flex;align-items:center;gap:10px;margin-bottom:12px}.ph h2{margin:0}.sp{flex:1}
 .tbl{width:100%;border-collapse:collapse;font-size:13px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.06);border-radius:12px;overflow:hidden}
 .tbl th{text-align:left;font-weight:600;color:#8a93a6;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.06)}

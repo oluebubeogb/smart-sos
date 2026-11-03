@@ -125,7 +125,7 @@ console.log("Loaded " + sessions.size + " session(s) from Postgres");
 // ---- partner keys cache (reloaded on every mutation) ----
 let keysById = new Map(), keysByHash = new Map();
 async function reloadKeys() {
-  const r = await db.q("SELECT * FROM partner_keys");
+  const r = await db.q("SELECT * FROM partner_keys WHERE deleted_at IS NULL");
   keysById = new Map(); keysByHash = new Map();
   for (const k of r.rows) { keysById.set(k.id, k); keysByHash.set(k.key_hash, k); }
 }
@@ -158,7 +158,7 @@ function readCookie(raw) {
 async function adminFromCookie(raw) {
   const c = readCookie(raw); if (!c) return null;
   if (c.u === ROOT_ID) return c.v === rootPwv() ? { id: ROOT_ID, username: ADMIN_USER, role: "super", email: null } : null;
-  const r = await db.q("SELECT id,username,email,pw_version,disabled FROM admins WHERE id=$1", [c.u]).catch(() => ({ rows: [] }));
+  const r = await db.q("SELECT id,username,email,pw_version,disabled FROM admins WHERE id=$1 AND deleted_at IS NULL", [c.u]).catch(() => ({ rows: [] }));
   const a = r.rows[0];
   if (!a || a.disabled || String(a.pw_version) !== String(c.v)) return null;
   return { id: a.id, username: a.username, email: a.email, role: "admin" };
@@ -209,7 +209,7 @@ app.post("/api/login", async (req, res) => {
     res.cookie("sg_session", signCookie({ u: ROOT_ID, v: rootPwv() }), COOKIE_OPTS);
     return res.json({ ok: true, role: "super" });
   }
-  const r = await db.q("SELECT * FROM admins WHERE lower(username)=lower($1) OR lower(email)=lower($1)", [username.trim()]);
+  const r = await db.q("SELECT * FROM admins WHERE deleted_at IS NULL AND (lower(username)=lower($1) OR lower(email)=lower($1))", [username.trim()]);
   const a = r.rows[0];
   if (a && !a.disabled && checkPassword(password, a.pass_hash)) {
     res.cookie("sg_session", signCookie({ u: a.id, v: a.pw_version }), COOKIE_OPTS);
@@ -223,7 +223,7 @@ app.get("/api/me", requireAdmin, (req, res) => res.json({ id: req.admin.id, user
 // ---- admins (superadmin manages) ----
 const adminView = (a) => ({ id: a.id, username: a.username, email: a.email, disabled: a.disabled, createdAt: a.created_at, keyCount: Number(a.key_count || 0) });
 app.get("/api/admins", requireAdmin, requireSuper, async (req, res) => {
-  const r = await db.q("SELECT a.*, (SELECT count(*) FROM partner_keys k WHERE k.owner_admin_id=a.id) key_count FROM admins a ORDER BY created_at");
+  const r = await db.q("SELECT a.*, (SELECT count(*) FROM partner_keys k WHERE k.owner_admin_id=a.id AND k.deleted_at IS NULL) key_count FROM admins a WHERE a.deleted_at IS NULL ORDER BY created_at");
   res.json({ admins: r.rows.map(adminView) });
 });
 app.post("/api/admins", requireAdmin, requireSuper, async (req, res) => {
@@ -256,16 +256,21 @@ app.patch("/api/admins/:id", requireAdmin, requireSuper, async (req, res) => {
 });
 app.delete("/api/admins/:id", requireAdmin, requireSuper, async (req, res) => {
   const id = req.params.id;
-  const r = await db.q("DELETE FROM admins WHERE id=$1", [id]).catch(() => ({ rowCount: 0 }));
-  if (!r.rowCount) return res.status(404).json({ error: "not found" });
-  // keys (FK ON DELETE SET NULL) and their sessions move to root
+  // Soft-delete: admin row goes to trash; their keys + sessions move to the superadmin (owner NULL).
+  // The moved ids are remembered in trash_meta so a restore can hand them back.
+  const ex = await db.q("SELECT id FROM admins WHERE id=$1 AND deleted_at IS NULL", [id]).catch(() => ({ rowCount: 0 }));
+  if (!ex.rowCount) return res.status(404).json({ error: "not found" });
+  const kIds = (await db.q("SELECT id FROM partner_keys WHERE owner_admin_id=$1", [id])).rows.map((r) => r.id);
+  const sIds = (await db.q("SELECT id FROM sessions WHERE owner_admin_id=$1", [id])).rows.map((r) => r.id);
+  await db.q("UPDATE admins SET deleted_at=now(), pw_version=pw_version+1, trash_meta=$2 WHERE id=$1", [id, JSON.stringify({ keyIds: kIds, sessionIds: sIds })]);
+  await db.q("UPDATE partner_keys SET owner_admin_id=NULL WHERE owner_admin_id=$1", [id]);
   await db.q("UPDATE sessions SET owner_admin_id=NULL WHERE owner_admin_id=$1", [id]);
   for (const s of sessions.values()) if (s.ownerAdminId === id) s.ownerAdminId = null;
   await reloadKeys();
-  res.json({ ok: true });
+  res.json({ ok: true, trashed: true });
 });
 app.post("/api/account/password", requireAdmin, async (req, res) => {
-  if (isSuper(req.admin)) return res.status(400).json({ error: "The env superadmin password is set via ADMIN_PASSWORD in your deployment env." });
+  if (isSuper(req.admin)) return res.status(400).json({ error: "The superadmin password can't be changed here." });
   const cur = String(req.body?.current || ""), next = String(req.body?.next || "");
   if (next.length < 8) return res.status(400).json({ error: "New password must be at least 8 characters" });
   const r = await db.q("SELECT pass_hash FROM admins WHERE id=$1", [req.admin.id]);
@@ -286,7 +291,7 @@ async function keyView(k, a, adminNames) {
     sessionCount: [...sessions.values()].filter((s) => s.keyId === k.id).length,
     activeCount: [...sessions.values()].filter((s) => s.keyId === k.id && s.active).length,
   };
-  if (isSuper(a)) v.createdBy = k.owner_admin_id ? (adminNames.get(k.owner_admin_id) || "deleted admin") : ADMIN_USER + " (env)";
+  if (isSuper(a)) v.createdBy = k.owner_admin_id ? (adminNames.get(k.owner_admin_id) || "deleted admin") : ADMIN_USER;
   return v;
 }
 async function adminNameMap() { return new Map((await db.q("SELECT id,username FROM admins")).rows.map((r) => [r.id, r.username])); }
@@ -363,22 +368,63 @@ app.post("/api/keys/:id/rotate", requireAdmin, async (req, res) => {
 });
 app.delete("/api/keys/:id", requireAdmin, async (req, res) => {
   const k = ownKey(req, res); if (!k) return;
-  await db.q("DELETE FROM partner_keys WHERE id=$1", [k.id]);
-  // sessions keep owner (so history stays visible to the owner) but lose key link
-  for (const s of sessions.values()) if (s.keyId === k.id) s.keyId = null;
+  // Soft-delete: key goes to trash and is disabled so the API stops accepting it. Sessions keep their key link.
+  await db.q("UPDATE partner_keys SET deleted_at=now(), enabled_before_delete=enabled, enabled=false WHERE id=$1", [k.id]);
   closeFeedSubscribers(k.id);
   await reloadKeys();
-  res.json({ ok: true });
+  res.json({ ok: true, trashed: true });
+});
+// ---- trash (soft-deleted keys + admins) ----
+app.get("/api/trash", requireAdmin, async (req, res) => {
+  const sup = isSuper(req.admin);
+  const names = await adminNameMap();
+  const kr = await db.q("SELECT * FROM partner_keys WHERE deleted_at IS NOT NULL" + (sup ? "" : " AND owner_admin_id=$1") + " ORDER BY deleted_at DESC", sup ? [] : [req.admin.id]);
+  const items = kr.rows.map((k) => ({ type: "key", id: k.id, name: k.org_name, sub: k.partner + " · " + k.key_prefix + "…", deletedAt: k.deleted_at,
+    owner: k.owner_admin_id ? (names.get(k.owner_admin_id) || "deleted admin") : ADMIN_USER, wasEnabled: k.enabled_before_delete !== false }));
+  if (sup) {
+    const ar = await db.q("SELECT id,username,email,deleted_at,trash_meta FROM admins WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC");
+    for (const a of ar.rows) items.push({ type: "admin", id: a.id, name: a.username, sub: a.email, deletedAt: a.deleted_at,
+      movedKeys: a.trash_meta?.keyIds?.length || 0, movedSessions: a.trash_meta?.sessionIds?.length || 0 });
+  }
+  items.sort((a, b) => new Date(b.deletedAt) - new Date(a.deletedAt));
+  res.json({ items });
+});
+app.post("/api/trash/:type/:id/restore", requireAdmin, async (req, res) => {
+  const { type, id } = req.params;
+  if (type === "key") {
+    const r = await db.q("SELECT * FROM partner_keys WHERE id=$1 AND deleted_at IS NOT NULL", [id]).catch(() => ({ rows: [] }));
+    const k = r.rows[0];
+    if (!k || !canSeeKey(req.admin, k)) return res.status(404).json({ error: "not found in trash" });
+    const en = k.enabled_before_delete !== false;
+    await db.q("UPDATE partner_keys SET deleted_at=NULL, enabled=$2, enabled_before_delete=NULL WHERE id=$1", [id, en]);
+    await reloadKeys();
+    return res.json({ ok: true, type, id, enabled: en });
+  }
+  if (type === "admin") {
+    if (!isSuper(req.admin)) return res.status(403).json({ error: "superadmin_only" });
+    const r = await db.q("SELECT * FROM admins WHERE id=$1 AND deleted_at IS NOT NULL", [id]).catch(() => ({ rows: [] }));
+    const a = r.rows[0];
+    if (!a) return res.status(404).json({ error: "not found in trash" });
+    // Hand back keys/sessions that were moved to the superadmin on delete and still belong to the superadmin.
+    const m = a.trash_meta || {};
+    const kr = m.keyIds?.length ? await db.q("UPDATE partner_keys SET owner_admin_id=$1 WHERE id = ANY($2::uuid[]) AND owner_admin_id IS NULL", [id, m.keyIds]) : { rowCount: 0 };
+    const sr = m.sessionIds?.length ? await db.q("UPDATE sessions SET owner_admin_id=$1 WHERE id = ANY($2::text[]) AND owner_admin_id IS NULL", [id, m.sessionIds]) : { rowCount: 0 };
+    for (const s of sessions.values()) if (s.ownerAdminId == null && m.sessionIds?.includes(s.id)) s.ownerAdminId = id;
+    await db.q("UPDATE admins SET deleted_at=NULL, trash_meta=NULL WHERE id=$1", [id]);
+    await reloadKeys();
+    return res.json({ ok: true, type, id, keysReturned: kr.rowCount, sessionsReturned: sr.rowCount });
+  }
+  res.status(400).json({ error: "type must be key or admin" });
 });
 app.get("/api/keys/:id/activity", requireAdmin, async (req, res) => {
   const k = ownKey(req, res); if (!k) return;
-  const r = await db.q("SELECT ts,method,endpoint,session_id,status,ip FROM partner_activity WHERE key_id=$1 ORDER BY ts DESC LIMIT 200", [k.id]);
+  const r = await db.q("SELECT ts,method,endpoint,session_id,status,ip,error,detail FROM partner_activity WHERE key_id=$1 ORDER BY ts DESC LIMIT 200", [k.id]);
   res.json({ activity: r.rows });
 });
 app.get("/api/activity", requireAdmin, async (req, res) => {
   const ids = [...keysById.values()].filter((k) => canSeeKey(req.admin, k)).map((k) => k.id);
   if (!ids.length) return res.json({ activity: [] });
-  const r = await db.q(`SELECT a.ts,a.method,a.endpoint,a.session_id,a.status,a.ip,k.org_name FROM partner_activity a JOIN partner_keys k ON k.id=a.key_id
+  const r = await db.q(`SELECT a.ts,a.method,a.endpoint,a.session_id,a.status,a.ip,a.error,a.detail,k.org_name FROM partner_activity a JOIN partner_keys k ON k.id=a.key_id
     WHERE a.key_id = ANY($1::uuid[]) ORDER BY a.ts DESC LIMIT 200`, [ids]);
   res.json({ activity: r.rows });
 });
@@ -598,10 +644,48 @@ function extractKey(req) {
   if (!key && /^Bearer\s+/i.test(auth)) key = auth.replace(/^Bearer\s+/i, "").trim();
   return String(key || "");
 }
+// Plain-language "what's missing / why it failed" for unsuccessful partner calls.
+const ERR_HINTS = {
+  missing_api_key: "No API key sent — add the X-API-Key header (or Authorization: Bearer …).",
+  invalid_api_key: "API key not recognised — it may have been rotated or deleted.",
+  api_key_disabled: "This API key is disabled (or in trash) — enable/restore it in Partners & Keys.",
+  read_token_is_read_only: "A read token (ssos_pub_…) was used on a write call — use the secret API key instead.",
+  invalid_token: "Read token not recognised — it may have been rotated.",
+  origin_not_allowed: "Request origin isn't in this key's allowed origins list.",
+  session_ended: "This SOS has already ended — start a new SOS (new external_ref or force_new:true).",
+  metadata_too_large: "metadata body is too large — trim it.",
+  lat_lng_required: "Missing location — body needs numeric lat and lng.",
+  type_required: "Missing event type — body needs a \"type\" field.",
+  no_audio_body: "Missing audio — the request body was empty.",
+  no_video_body: "Missing video — the request body was empty.",
+  operator_id_required: "Missing operator_id in the request body.",
+  "bad kind": "Unknown media kind in the URL — use audio or video.",
+  rate_limited: "Too many requests — slow down and retry.",
+};
+function activityHint(req, res, body) {
+  const code = res.statusCode;
+  if (code < 400) return { error: null, detail: null };
+  const err = (body && typeof body.error === "string" ? body.error : null) || res.locals.partnerError || null;
+  const id = req.params?.id || res.locals.sessionId || null;
+  let detail;
+  if (err === "session_not_found") detail = id ? `Session not found — no SOS with id/ref "${String(id).slice(0, 60)}" exists for this key. Check the session id from start.` : "Session not found for this key.";
+  else if (err && ERR_HINTS[err]) detail = ERR_HINTS[err];
+  else if (err && /required|missing/i.test(err)) detail = "Missing field: " + err.replace(/_/g, " ");
+  else if (err) detail = (body?.message ? body.message : err.replace(/_/g, " "));
+  else if (code === 404) detail = "Endpoint not found — check the URL path and method.";
+  else if (code === 401) detail = "Not authorised — check the API key.";
+  else if (code === 413) detail = "Request body too large.";
+  else if (code >= 500) detail = "Server error — retry; if it persists contact support.";
+  else detail = "Request rejected (" + code + ").";
+  return { error: err, detail: String(detail).slice(0, 300) };
+}
 function logActivity(req, res, k) {
+  const json = res.json.bind(res);
+  res.json = (b) => { res.locals._body = b; return json(b); };
   res.on("finish", () => {
-    bg(db.q("INSERT INTO partner_activity(key_id,method,endpoint,session_id,status,ip) VALUES($1,$2,$3,$4,$5,$6)",
-      [k.id, req.method, (req.baseUrl + req.path).replace(P, "").slice(0, 200), req.params?.id || res.locals.sessionId || null, res.statusCode, req.ip || null]));
+    const h = activityHint(req, res, res.locals._body);
+    bg(db.q("INSERT INTO partner_activity(key_id,method,endpoint,session_id,status,ip,error,detail) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+      [k.id, req.method, (req.baseUrl + req.path).replace(P, "").slice(0, 200), req.params?.id || res.locals.sessionId || null, res.statusCode, req.ip || null, h.error, h.detail]));
   });
 }
 function requirePartner(req, res, next) {

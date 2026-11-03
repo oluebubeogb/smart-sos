@@ -4,6 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Smart SOS - Admin</title>
+<link rel="icon" type="image/png" href="/favicon.png" />
+<link rel="icon" href="/favicon.ico" sizes="any" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
@@ -187,7 +190,7 @@ function renderLogin(msg){
   document.getElementById("app").innerHTML = `
   <div class="login-wrap"><div class="login">
     <div class="brand">
-      <div class="mark"><span></span></div>
+      <img class="mark" src="/icon.png" alt="" style="background:#fff;padding:3px;object-fit:contain">
       <div><h1>Smart SOS - Admin</h1></div>
     </div>
     <div class="sub">Admin Console</div>
@@ -212,9 +215,9 @@ window.logout = async ()=>{ await fetch("/api/logout",{method:"POST",credentials
 function renderApp(){
   injectCSS();
   document.getElementById("app").innerHTML = `
-  <div class="shell">
+  <div class="shell${SSOS.collapsed?' collapsed':''}">
     <div class="topbar">
-      <div class="mark"><span></span></div>
+      <img class="mark" src="/icon.png" alt="" style="background:#fff;padding:3px;object-fit:contain">
       <h1>Smart SOS - Admin</h1>
       <div class="sp"></div>
       <span class="mut" style="font-size:12.5px;margin-right:10px">${(window.SSOS&&SSOS.me)?SSOS.me.username+(SSOS.me.role==='super'?' · superadmin':''):''}</span>
