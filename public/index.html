@@ -211,7 +211,6 @@ function renderApp(){
   <div class="shell${SSOS.collapsed?' collapsed':''}${SSOS.page==='sessions'?' has-sess':''}">
     <div class="sidebar navbar">
       ${ssosNav()}
-      <button class="sbedge" onclick="toggleSidebar()" title="${SSOS.collapsed?'Expand sidebar':'Collapse sidebar'}">${ICONS.collapse}</button>
     </div>
     ${SSOS.page==='sessions'?`<div class="sidebar sessbar">
       <div class="sesshead">${filter==='live'?'Live':'History'}</div>

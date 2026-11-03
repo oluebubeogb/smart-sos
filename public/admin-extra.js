@@ -35,6 +35,7 @@ window.ssosNav = ()=>`
     <img class="sbicon" src="/icon.png" alt="Smart SOS" title="Smart SOS">
     <span class="sbname">Smart SOS</span>
   </div>
+  <button class="sbedge" type="button" onclick="toggleSidebar()" title="${SSOS.collapsed?'Expand sidebar':'Collapse sidebar'}">${ICONS.collapse}</button>
   <nav class="nav">
     ${nvItem(SSOS.page==='sessions'&&window.__filter()==='live',"goSessions('live')","live","Live",'<span class="n" id="n-live"></span>')}
     ${nvItem(SSOS.page==='sessions'&&window.__filter()==='history',"goSessions('history')","history","History",'<span class="n" id="n-hist"></span>')}
