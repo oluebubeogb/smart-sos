@@ -292,25 +292,46 @@ async function loadAudio(id){
     const box = $("#audioList"); if(!box) return;
     if(!files || !files.length){ box.innerHTML = '<span class="mut">No audio files.</span>'; return; }
     const rec = files.find(f=>f.name.startsWith("recording"));
-    const ordered = rec ? [rec, ...files.filter(f=>f!==rec)] : files;
+    // Prefer the finalized full recording; otherwise show segment files
+    // (each segment is a complete file after the PWA recorder fix).
+    const ordered = rec ? [rec] : files.filter(f=>f.name.startsWith("chunk-"));
+    if(!ordered.length){ box.innerHTML = '<span class="mut">No playable audio yet.</span>'; return; }
     box.innerHTML = ordered.map(f=>`
       <div class="audio-row">
-        <span class="nm">${f.name.startsWith("recording")?"Full recording":f.name}</span>
-        <audio controls preload="none" src="${f.url}"></audio>
+        <span class="nm">${f.name.startsWith("recording")?"Full recording":("Segment "+f.name)}</span>
+        <audio controls preload="metadata" src="${f.url}"></audio>
       </div>`).join("");
   }catch(e){ const box=$("#audioList"); if(box) box.innerHTML='<span class="mut">Could not load audio.</span>'; }
+}
+
+function attachRemoteAudio(trk){
+  if(!trk || trk.kind!=='audio') return;
+  const a=$("#liveAudio"); if(!a) return;
+  a.style.display="block";
+  a.autoplay=true; a.muted=false; a.volume=1;
+  a.playsInline=true;
+  a.srcObject=new MediaStream([trk.mediaStreamTrack]);
+  const p=a.play(); if(p&&p.catch) p.catch(err=>console.warn("audio play", err));
 }
 
 window.startListen = async (id)=>{
   const {livekitUrl, token} = await api(`/api/session/${id}/listen-token`);
   try{
+    if(room){ try{ room.disconnect(); }catch{} room=null; }
     room = new LivekitClient.Room();
+    room.on(LivekitClient.RoomEvent.TrackSubscribed,(trk)=> attachRemoteAudio(trk));
+    room.on(LivekitClient.RoomEvent.TrackUnsubscribed,()=>{});
     await room.connect(livekitUrl, token);
-    room.on(LivekitClient.RoomEvent.TrackSubscribed,(trk)=>{
-      if(trk.kind==='audio'){ const a=$("#liveAudio"); a.style.display="block"; a.srcObject=new MediaStream([trk.mediaStreamTrack]); a.play(); }
-    });
+    // Attach tracks already published before we joined
+    for (const p of room.remoteParticipants.values()){
+      const pubs = p.trackPublications || p.audioTrackPublications;
+      if(!pubs) continue;
+      pubs.forEach(pub=>{
+        if(pub.track && (pub.kind==='audio' || pub.kind===LivekitClient.Track.Kind.Audio)) attachRemoteAudio(pub.track);
+      });
+    }
     const b=$("#listenBtn"); if(b) b.textContent = "Listening…";
-  }catch(e){ alert("LiveKit connect failed: "+e.message+"\nCheck LIVEKIT_URL / keys."); }
+  }catch(e){ alert("LiveKit connect failed: "+e.message+"\nCheck LIVEKIT_URL / API key+secret match the SFU."); }
 };
 window.endSession = async (id)=>{
   await api(`/api/session/${id}/end`,{method:"POST"});

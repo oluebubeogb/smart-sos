@@ -1,8 +1,7 @@
 # Coolify-friendly compose for the Now Smart SOS admin backend.
-# In Coolify: create a "Docker Compose" resource, point at this file,
-# set the env vars (see .env.example), attach a persistent volume for /data,
-# and map a domain. PORT inside the container must match the published port
-# Coolify/proxy routes to (set PORT=7474 and "7474:7474" if you change it).
+# Set PORT in Coolify env (default 7474 — host 8080 is often taken).
+# If Coolify proxies via Traefik and still conflicts on host binds, delete the
+# `ports:` block and set the resource's "Ports Exposes" to the same PORT value.
 services:
   sos-guard-server:
     build: .

@@ -127,7 +127,7 @@ function renderChrome(d){
       </div>
       <div class="sos-zone">
         <button class="sos-btn" id="sosBtn">SOS</button>
-        <div class="status" id="status">Tap SOS to start an alert</div>
+        <div class="status" id="status"></div>
       </div>`;
     wireCalc();
   } else {
@@ -137,13 +137,58 @@ function renderChrome(d){
       </div>
       <div class="sos-zone">
         <button class="sos-btn" id="sosBtn">SOS</button>
-        <div class="status" id="status">Tap SOS to start an alert</div>
+        <div class="status" id="status"></div>
       </div>`;
     const note = document.getElementById("note");
     note.value = localStorage.getItem("nss_note")||"";
     note.oninput = ()=> localStorage.setItem("nss_note", note.value);
   }
-  document.getElementById("sosBtn").onclick = toggleSos;
+  wireSosButton();
+}
+
+function isReady(){ return localStorage.getItem("nss_ready") === "1"; }
+
+function wireSosButton(){
+  const btn = document.getElementById("sosBtn");
+  if(!btn) return;
+  if(!isReady()){
+    btn.classList.remove("on");
+    btn.textContent = "I'm ready";
+    setStatus("You're safe now — tap to enable protection, then SOS works in one tap");
+    btn.onclick = enableProtection;
+  } else {
+    btn.classList.remove("on");
+    btn.textContent = "SOS";
+    setStatus("Protection on — tap SOS when you need help");
+    btn.onclick = toggleSos;
+  }
+}
+
+async function enableProtection(){
+  const btn = document.getElementById("sosBtn");
+  setStatus("Allow mic & location when prompted…");
+  btn.disabled = true;
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},
+      video:false,
+    });
+    stream.getTracks().forEach(t=>t.stop()); // grant only — don't keep mic open
+  }catch(e){
+    btn.disabled = false;
+    setStatus("Mic needed for SOS: "+e.message);
+    return;
+  }
+  try{
+    await new Promise((res,rej)=> navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true,timeout:10000}));
+  }catch(e){
+    // location optional but we still try once during onboarding
+  }
+  localStorage.setItem("nss_ready","1");
+  btn.disabled = false;
+  btn.textContent = "SOS";
+  btn.onclick = toggleSos;
+  setStatus("You're protected — tap SOS for your first alert");
 }
 
 function wireCalc(){
@@ -186,11 +231,12 @@ async function toggleSos(){
 }
 
 async function startSos(){
+  if(!isReady()){ await enableProtection(); return; }
   const decoy = getDecoy();
   const btn = document.getElementById("sosBtn");
-  setStatus("Requesting mic & location…");
+  setStatus("Starting SOS…");
   try{
-    mediaStream = await navigator.mediaDevices.getUserMedia({audio:true, video:false});
+    mediaStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}, video:false});
   }catch(e){ setStatus("Mic denied: "+e.message); return; }
 
   let lat=null, lng=null, acc=null;
@@ -221,15 +267,23 @@ async function startSos(){
   btn.classList.add("on");
   btn.textContent = "STOP";
 
-  // LiveKit publish
+  // LiveKit publish — use LiveKit's own mic track (don't wrap the MediaRecorder stream)
   try{
-    room = new LivekitClient.Room();
+    room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
     await room.connect(data.livekitUrl, data.token);
-    const track = new LivekitClient.LocalAudioTrack(mediaStream.getAudioTracks()[0]);
-    await room.localParticipant.publishTrack(track);
+    // Prefer LiveKit helper so encode/mute state is correct across browsers
+    if (room.localParticipant.setMicrophoneEnabled) {
+      await room.localParticipant.setMicrophoneEnabled(true);
+    } else {
+      const lkTrack = await LivekitClient.createLocalAudioTrack({
+        echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+      });
+      await room.localParticipant.publishTrack(lkTrack);
+    }
+    setStatus("LiveKit connected · session "+sessionId);
   }catch(e){ setStatus("Live audio failed (recording continues): "+e.message); }
 
-  // MediaRecorder -> upload chunks
+  // MediaRecorder on a CLONE of the local mic stream (LiveKit owns its own track)
   startRecorder();
 
   // Location watch
@@ -247,36 +301,82 @@ async function startSos(){
   setStatus("Live · session "+sessionId);
 }
 
+function pickMime(){
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/aac",
+  ];
+  for (const m of candidates){
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+  }
+  return "";
+}
+
+async function uploadBlob(blob){
+  if(!blob || !blob.size || !sessionId) return;
+  try{
+    const r = await fetch("/api/session/"+sessionId+"/audio", {
+      method:"POST",
+      headers:{"Content-Type": blob.type || "audio/webm"},
+      body: blob,
+    });
+    if(!r.ok) console.warn("audio upload failed", r.status);
+  }catch(e){ console.warn("audio upload error", e); }
+}
+
+// Restart MediaRecorder every ~10s so each upload is a complete, playable file
+// (timeslice blobs after the first are not valid standalone WebM and play as 0:00).
 function startRecorder(){
   if(!mediaStream) return;
-  const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
-    : (MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
-    : (MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4" : ""));
-  try{
-    recorder = new MediaRecorder(mediaStream, mime ? {mimeType: mime} : undefined);
-  }catch(e){ setStatus("Recorder unavailable: "+e.message); return; }
-  recorder.ondataavailable = async (ev)=>{
-    if(!ev.data || !ev.data.size || !sessionId) return;
+  const mime = pickMime();
+  let recordStream = mediaStream;
+  try { recordStream = mediaStream.clone(); } catch {}
+
+  const startOne = ()=>{
+    if(!active || !sessionId) return;
+    let rec;
     try{
-      await fetch("/api/session/"+sessionId+"/audio", {
-        method:"POST",
-        headers:{"Content-Type": ev.data.type || "audio/webm"},
-        body: ev.data,
-      });
-    }catch{}
+      rec = new MediaRecorder(recordStream, mime ? {mimeType: mime, audioBitsPerSecond: 64000} : {audioBitsPerSecond: 64000});
+    }catch(e){ setStatus("Recorder unavailable: "+e.message); return; }
+    recorder = rec;
+    rec.ondataavailable = async (ev)=>{
+      // only use the blob from stop() — full file with headers
+      if(ev.data && ev.data.size) await uploadBlob(ev.data);
+    };
+    rec.onerror = (e)=> console.warn("MediaRecorder error", e);
+    try { rec.start(); } catch(e){ setStatus("Recorder start failed: "+e.message); return; }
+    uploadTimer = setTimeout(()=>{
+      if(recorder === rec && rec.state === "recording"){
+        try { rec.stop(); } catch {}
+        // start next segment after stop flushes
+        setTimeout(startOne, 200);
+      }
+    }, 10000);
   };
-  recorder.start(10000); // ~10s chunks
+  startOne();
 }
 
 async function stopSos(){
   const btn = document.getElementById("sosBtn");
   setStatus("Stopping…");
   active = false;
+  if(uploadTimer){ clearTimeout(uploadTimer); uploadTimer=null; }
   if(recorder && recorder.state !== "inactive"){
-    await new Promise((res)=>{ recorder.onstop = res; try{recorder.stop();}catch{res();} });
+    await new Promise((res)=>{
+      const r = recorder;
+      r.onstop = res;
+      try{ r.requestData(); }catch{}
+      try{ r.stop(); }catch{ res(); }
+    });
   }
   recorder = null;
-  if(room){ try{ room.disconnect(); }catch{} room=null; }
+  if(room){
+    try{ await room.localParticipant.setMicrophoneEnabled(false); }catch{}
+    try{ room.disconnect(); }catch{}
+    room=null;
+  }
   if(mediaStream){ mediaStream.getTracks().forEach(t=>t.stop()); mediaStream=null; }
   if(watchId!=null){ navigator.geolocation.clearWatch(watchId); watchId=null; }
 
