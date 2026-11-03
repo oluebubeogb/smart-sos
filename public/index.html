@@ -62,8 +62,8 @@ let sessionsCache = [];
 // ---- dashboard CSS injected at runtime ----
 const DASH_CSS = `
 .shell{display:grid;grid-template-columns:230px 1fr;grid-template-rows:auto 1fr auto;height:100vh}
-.topbar{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:12px 18px;
-  background:linear-gradient(180deg,#121a2a,#0e1320);border-bottom:1px solid var(--line)}
+.topbar{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:6px 14px;
+  background:#0e1320;border-bottom:1px solid var(--line)}
 .topbar .mark{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#b0323f);
   display:grid;place-items:center;box-shadow:0 6px 16px -8px var(--accent)}
 .topbar .mark span{width:8px;height:8px;border-radius:50%;background:#fff}
@@ -217,8 +217,6 @@ function renderApp(){
   document.getElementById("app").innerHTML = `
   <div class="shell${SSOS.collapsed?' collapsed':''}${SSOS.page==='sessions'?' has-sess':''}">
     <div class="topbar">
-      <img class="mark" src="/icon.png" alt="" style="background:#fff;padding:3px;object-fit:contain">
-      <h1>Smart SOS</h1>
       <div class="sp"></div>
       <span class="mut" style="font-size:12.5px;margin-right:10px">${(window.SSOS&&SSOS.me)?SSOS.me.username+(SSOS.me.role==='super'?' · superadmin':''):''}</span>
       <button class="btn" onclick="logout()">Log out</button>
