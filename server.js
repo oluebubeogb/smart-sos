@@ -570,11 +570,21 @@ async function saveMedia(s, kind, buf, mime, cam) {
   return name;
 }
 
+// Post-end media window: final partial + delayed (offline) clips may still upload to the SAME ended session.
+const POST_END_UPLOAD_WINDOW_MS = Math.max(0, Number(process.env.POST_END_UPLOAD_WINDOW_MS ?? 900000) || 0);
+function mediaUploadUntil(s) { return s.active ? null : (s.endedAt ? s.endedAt + POST_END_UPLOAD_WINDOW_MS : null); }
+function mediaUploadOpen(s) { return !!s.active || (!!s.endedAt && Date.now() - s.endedAt < POST_END_UPLOAD_WINDOW_MS); }
+function uploadClosed(res, s) {
+  return res.status(409).json({ error: "upload_window_closed", sessionId: s.id, endedAt: s.endedAt || null, uploadsOpenUntil: mediaUploadUntil(s),
+    message: "This SOS ended and its post-end media upload window (" + Math.round(POST_END_UPLOAD_WINDOW_MS / 60000) + " min) has closed. Discard these clips; do not start a new SOS for backfill." });
+}
+
 app.post("/api/session/:id/audio",
   express.raw({ type: ["audio/*", "application/octet-stream"], limit: "25mb" }), upload.single("audio"),
   async (req, res) => {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "no session" });
+    if (!mediaUploadOpen(s)) return uploadClosed(res, s);
     const { buf, mime } = bufFromReq(req);
     if (!buf || !buf.length) return res.status(400).json({ error: "no audio body" });
     try { const file = await saveMedia(s, "audio", buf, mime); res.json({ ok: true, file, count: s.audioFiles.length }); }
@@ -658,6 +668,7 @@ app.post("/api/session/:id/video",
   async (req, res) => {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: "no session" });
+    if (!mediaUploadOpen(s)) return uploadClosed(res, s);
     const { buf, mime } = bufFromReq(req);
     if (!buf || !buf.length) return res.status(400).json({ error: "no video body" });
     const cam = videoCamSafe(req.query.cam || req.headers["x-sos-cam"] || "cam");
@@ -779,6 +790,7 @@ const ERR_HINTS = {
   read_token_is_read_only: "A read token (ssos_pub_…) was used on a write call — use the secret API key instead.",
   invalid_token: "Read token not recognised — it may have been rotated.",
   origin_not_allowed: "Request origin isn't in this key's allowed origins list.",
+  upload_window_closed: "Audio/video arrived after the post-end upload window (POST_END_UPLOAD_WINDOW_MS) closed — upload final/delayed clips sooner after end.",
   session_ended: "This SOS has already ended — start a new SOS (new external_ref or force_new:true).",
   metadata_too_large: "metadata body is too large — trim it.",
   lat_lng_required: "Missing location — body needs numeric lat and lng.",
@@ -840,6 +852,7 @@ function partnerView(s) {
     locationCount: s.locations.length, nearbyCount: (s.nearby || []).length || s.nearbyCount || 0,
     audioCount: (s.audioFiles || []).filter((f) => f.startsWith("chunk-")).length,
     videoCount: (s.videoFiles || []).length,
+    mediaUploadOpen: mediaUploadOpen(s), mediaUploadUntil: mediaUploadUntil(s),
   };
 }
 async function sendWebhook(k, url, event, payload) {
@@ -941,6 +954,7 @@ app.post(P + "/sessions/:id/events", requirePartner, partnerSession, (req, res) 
 app.post(P + "/sessions/:id/audio", requirePartner, partnerSession,
   express.raw({ type: ["audio/*", "application/octet-stream"], limit: "25mb" }), upload.single("audio"),
   async (req, res) => {
+    if (!mediaUploadOpen(req.sos)) return uploadClosed(res, req.sos);
     const { buf, mime } = bufFromReq(req);
     if (!buf || !buf.length) return res.status(400).json({ error: "no_audio_body" });
     try { res.json({ ok: true, file: await saveMedia(req.sos, "audio", buf, mime) }); }
@@ -949,6 +963,7 @@ app.post(P + "/sessions/:id/audio", requirePartner, partnerSession,
 app.post(P + "/sessions/:id/video", requirePartner, partnerSession,
   express.raw({ type: ["video/*", "application/octet-stream"], limit: "40mb" }), upload.single("video"),
   async (req, res) => {
+    if (!mediaUploadOpen(req.sos)) return uploadClosed(res, req.sos);
     const { buf, mime } = bufFromReq(req);
     if (!buf || !buf.length) return res.status(400).json({ error: "no_video_body" });
     const cam = videoCamSafe(req.query.cam || req.headers["x-sos-cam"] || req.body?.cam || "cam");
