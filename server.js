@@ -16,6 +16,8 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { AccessToken, RoomServiceClient, WebhookReceiver } from "livekit-server-sdk";
 import multer from "multer";
+import { spawn } from "node:child_process";
+import os from "node:os";
 import * as db from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -667,6 +669,97 @@ app.get("/api/session/:id/video", requireAdmin, adminSession, async (req, res) =
   res.json({ files: (await listVideo(s.id)).map((f) => ({ name: f, url: "/api/session/" + s.id + "/video/" + f })) });
 });
 app.get("/api/session/:id/video/:file", requireAdmin, adminSession, (req, res) => sendVideo(req, res, req.sos, req.params.file));
+
+// ---- mark-to-export: join marked chunks into ONE file with ffmpeg ----
+const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
+let _ffOk = null;
+function ffmpegAvailable() {
+  if (_ffOk !== null) return Promise.resolve(_ffOk);
+  return new Promise((r) => {
+    const p = spawn(FFMPEG, ["-version"]); p.on("error", () => r(_ffOk = false)); p.on("close", (c) => r(_ffOk = c === 0));
+  });
+}
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(FFMPEG, ["-hide_banner", "-loglevel", "error", "-y", ...args]);
+    let err = ""; p.stderr.on("data", (d) => { err += d; if (err.length > 8000) err = err.slice(-8000); });
+    p.on("error", reject);
+    p.on("close", (c) => c === 0 ? resolve() : reject(new Error(err.trim().split("\n").slice(-3).join(" | ") || "ffmpeg exit " + c)));
+  });
+}
+const extOf = (f) => path.extname(f).slice(1).toLowerCase();
+app.get("/api/export/status", requireAdmin, async (req, res) => res.json({ ffmpeg: await ffmpegAvailable() }));
+app.post("/api/session/:id/export", requireAdmin, adminSession, express.json({ limit: "1mb" }), async (req, res) => {
+  const s = req.sos;
+  const kind = req.body?.kind === "video" ? "video" : req.body?.kind === "audio" ? "audio" : null;
+  if (!kind) return res.status(400).json({ error: "kind must be audio or video" });
+  const re = kind === "audio" ? /^chunk-\d+\.(webm|m4a)$/ : VIDEO_RE;
+  const dir = kind === "audio" ? sessionAudioDir(s.id) : sessionVideoDir(s.id);
+  const files = [...new Set((Array.isArray(req.body?.files) ? req.body.files : []).map((f) => path.basename(String(f))))].filter((f) => re.test(f));
+  if (!files.length) return res.status(400).json({ error: "no valid marked files" });
+  if (files.length > 500) return res.status(400).json({ error: "too many files (max 500)" });
+  // serial order = chunk/seq index (upload order); for video keep cam grouping stable
+  const seq = (f) => parseInt((f.match(/(\d+)\.\w+$/) || [])[1] || "0", 10);
+  files.sort((a, b) => seq(a) - seq(b) || a.localeCompare(b));
+  for (const f of files) { try { await fsp.access(path.join(dir, f)); } catch { return res.status(404).json({ error: "missing " + f }); } }
+  if (!(await ffmpegAvailable())) return res.status(501).json({ error: "ffmpeg not installed on server — install ffmpeg in the image (apk add ffmpeg) to join clips" });
+
+  const exts = new Set(files.map(extOf));
+  const same = exts.size === 1;
+  const outExt = kind === "audio" ? (same && exts.has("m4a") ? "m4a" : (same ? "webm" : "m4a")) : (same ? [...exts][0] : "mp4");
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "sos-exp-"));
+  const out = path.join(tmp, "out." + outExt);
+  try {
+    const list = path.join(tmp, "list.txt");
+    await fsp.writeFile(list, files.map((f) => "file '" + path.join(dir, f).replace(/'/g, "'\\''") + "'").join("\n"));
+    let ok = false;
+    if (same) { // fast lossless join (same container/codec)
+      try {
+        await runFfmpeg(["-fflags", "+genpts", "-f", "concat", "-safe", "0", "-i", list, ...(kind === "video" ? [] : ["-vn"]), "-c", "copy", ...(outExt === "webm" ? [] : ["-movflags", "+faststart"]), out]);
+        ok = true;
+      } catch (e) { console.warn("export copy-concat failed, re-encoding:", e.message); }
+    }
+    if (!ok) { // mixed codecs / bad timestamps: re-encode via concat filter
+      const fin = path.join(tmp, kind === "video" ? "out.mp4" : "out.m4a");
+      const inputs = files.flatMap((f) => ["-i", path.join(dir, f)]);
+      if (kind === "audio") {
+        const fc = files.map((_, i) => `[${i}:a:0]aresample=48000,aformat=channel_layouts=mono[a${i}]`).join(";") + ";" + files.map((_, i) => `[a${i}]`).join("") + `concat=n=${files.length}:v=0:a=1[a]`;
+        await runFfmpeg([...inputs, "-filter_complex", fc, "-map", "[a]", "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", fin]);
+      } else {
+        // each video chunk must carry audio; if one lacks sound, pad with silence
+        const parts = [], fc = [];
+        for (let i = 0; i < files.length; i++) {
+          const hasA = await new Promise((r) => { const p = spawn(FFMPEG, ["-hide_banner", "-i", path.join(dir, files[i])]); let o = ""; p.stderr.on("data", (d) => o += d); p.on("close", () => r(/Audio:/.test(o))); p.on("error", () => r(false)); });
+          fc.push(`[${i}:v:0]scale=640:480:force_original_aspect_ratio=decrease,pad=640:480:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,format=yuv420p[v${i}]`);
+          fc.push(hasA ? `[${i}:a:0]aresample=48000,aformat=channel_layouts=stereo[a${i}]` : `anullsrc=r=48000:cl=stereo,atrim=0:${await durOf(path.join(dir, files[i]))}[a${i}]`);
+          parts.push(`[v${i}][a${i}]`);
+        }
+        const graph = fc.join(";") + ";" + parts.join("") + `concat=n=${files.length}:v=1:a=1[v][a]`;
+        await runFfmpeg([...inputs, "-filter_complex", graph, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", fin]);
+      }
+      return sendExport(res, fin, s.id, kind, tmp);
+    }
+    return sendExport(res, out, s.id, kind, tmp);
+  } catch (e) {
+    fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
+    console.error("export failed", s.id, e.message);
+    res.status(500).json({ error: "join failed", detail: e.message });
+  }
+});
+function durOf(fp) {
+  return new Promise((r) => { const p = spawn(FFMPEG, ["-hide_banner", "-i", fp]); let o = ""; p.stderr.on("data", (d) => o += d);
+    p.on("close", () => { const m = o.match(/Duration: (\d+):(\d+):([\d.]+)/); r(m ? (+m[1] * 3600 + +m[2] * 60 + +m[3]).toFixed(2) : "60"); }); p.on("error", () => r("60")); });
+}
+async function sendExport(res, fp, id, kind, tmp) {
+  const ext = extOf(fp);
+  const mime = kind === "audio" ? (ext === "m4a" ? "audio/mp4" : "audio/webm") : (ext === "mp4" ? "video/mp4" : "video/webm");
+  const st = await fsp.stat(fp);
+  res.setHeader("Content-Type", mime); res.setHeader("Content-Length", st.size);
+  res.setHeader("Content-Disposition", `attachment; filename="sos-${id}-${kind}-joined.${ext}"`);
+  const rs = fs.createReadStream(fp); rs.pipe(res);
+  const clean = () => fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
+  rs.on("close", clean); res.on("close", clean);
+}
 
 // =====================================================================
 // partner / integration API  (/api/partner/v1)

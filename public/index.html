@@ -361,7 +361,7 @@ async function loadAudio(id){
       <div class="exp-tools">
         <label class="mark-all"><input type="checkbox" class="mark-all-cb"> Mark all audio</label>
         <button type="button" class="tool-btn compact-btn${compact?" on":""}">${compact?"Full cards":"Condensed"}</button>
-        <button class="exp-btn export-btn" disabled>Export marked (0)</button>
+        <button class="exp-btn export-btn" disabled>Export marked audio (0)</button>
       </div>
     </div>`;
     html += `<div id="chunkPlaylist">` + chunks.map((f,i)=>`
@@ -406,7 +406,7 @@ async function loadVideo(id){
       <div class="exp-tools">
         <label class="mark-all"><input type="checkbox" class="mark-all-cb"> Mark all video</label>
         <button type="button" class="tool-btn compact-btn${compact?" on":""}">${compact?"Full cards":"Condensed"}</button>
-        <button class="exp-btn export-btn" disabled>Download marked (0)</button>
+        <button class="exp-btn export-btn" disabled>Export marked video (0)</button>
       </div>
     </div><div id="vidRows">`;
     html += list.map((f,i)=>{
@@ -554,7 +554,7 @@ async function drawWave(box, i, url){
 
 function wireExport(box, id, kind){
   const btn = box.querySelector(".export-btn"); if(!btn) return;
-  const label = kind === "video" ? "Download marked" : "Export marked";
+  const label = kind === "video" ? "Export marked video" : "Export marked audio";
   const marked = ()=>[...box.querySelectorAll("input.mk:checked")].sort((a,b)=>a.dataset.n-b.dataset.n);
   box.querySelectorAll("input.mk").forEach(c=>c.addEventListener("change", ()=>{
     const n = marked().length; btn.textContent = `${label} (${n})`; btn.disabled = !n;
@@ -564,20 +564,13 @@ function wireExport(box, id, kind){
     const list = marked(); if(!list.length) return;
     btn.disabled = true; const old = btn.textContent; btn.textContent = "Exporting…";
     try{
-      if(kind === "video"){
-        // video segments are separate files (each playable with sound) — download each marked one
-        for(const c of list){
-          const r = await fetch(c.dataset.url,{credentials:"same-origin"}); if(!r.ok) throw new Error("fetch "+r.status);
-          const b = await r.blob(); const a = document.createElement("a"); a.href = URL.createObjectURL(b);
-          a.download = `sos-${id}-${c.dataset.name||"video"}`; document.body.appendChild(a); a.click(); a.remove();
-          setTimeout(()=>URL.revokeObjectURL(a.href), 60000); await new Promise(r=>setTimeout(r, 400));
-        }
-        btn.textContent = old; btn.disabled = false; return;
-      }
-      const parts = [];
-      for(const c of list){ const r = await fetch(c.dataset.url,{credentials:"same-origin"}); if(!r.ok) throw new Error("fetch "+r.status); parts.push(await r.arrayBuffer()); }
-      const blob = new Blob(parts, {type:"audio/webm"});
-      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `sos-${id}-export.webm`;
+      // server joins ONLY the marked chunks, in chunk order, into ONE file (ffmpeg)
+      const files = list.map(c=>decodeURIComponent(c.dataset.url.split("/").pop()));
+      const r = await fetch(`/api/session/${id}/export`, {method:"POST", credentials:"same-origin", headers:{"Content-Type":"application/json"}, body: JSON.stringify({kind, files})});
+      if(!r.ok){ let m = "HTTP "+r.status; try{ const j = await r.json(); m = j.error + (j.detail? " — "+j.detail : ""); }catch{} throw new Error(m); }
+      const cd = r.headers.get("Content-Disposition")||""; const fn = (cd.match(/filename="([^"]+)"/)||[])[1] || `sos-${id}-${kind}-joined`;
+      const blob = await r.blob();
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fn;
       document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href), 60000);
     }catch(e){ alert("Export failed: "+e.message); }
     btn.textContent = old; btn.disabled = false;
