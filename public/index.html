@@ -286,7 +286,7 @@ window.openSession = async (id)=>{
         <div class="live-tile empty" data-slot="__wait">Waiting for video…</div>
       </div>
       <div class="live-audio-wrap"><audio id="liveAudio" autoplay controls style="width:100%;display:none"></audio></div>
-      <p class="mut" id="liveHint" style="font-size:12px;margin:8px 0 0">Tap <b>Watch live</b> above to subscribe. Video is low-res; audio stays as before.</p>
+      <p class="mut" id="liveHint" style="font-size:12px;margin:8px 0 0">Connecting live stream… Video is low-res; audio stays as before. Use <b>Watch live</b> to reconnect if needed.</p>
     </div>
     <div class="grid2">
       <div class="card"><h3>Session</h3>
@@ -322,6 +322,9 @@ window.openSession = async (id)=>{
   setupMap(s);
   if(s.hasAudio) loadAudio(id);
   if(s.hasVideo) loadVideo(id);
+  // Live SOS: auto-start Watch live as soon as the session opens (button kept for reconnect).
+  if(room){ try{ room.disconnect(); }catch{} room=null; clearLiveTiles(); }
+  if(s.active){ startListen(id); }
 };
 
 function fmtLoc(l){ return l ? `${l.lat.toFixed(5)}, ${l.lng.toFixed(5)} (±${l.acc??'?'}m)` : "—"; }
